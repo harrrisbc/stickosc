@@ -1,0 +1,29 @@
+# StickOSC config — remap by changing `address` only
+osc:
+  host: 127.0.0.1
+  port: 9000
+  prefix: /xbox
+
+controller:
+  index: 0
+  deadzone: 0.12
+
+map:
+  a:       { address: /xbox/btn/a,        type: button }
+  b:       { address: /xbox/btn/b,        type: button }
+  x:       { address: /xbox/btn/x,        type: button }
+  y:       { address: /xbox/btn/y,        type: button }
+  lb:      { address: /xbox/btn/lb,       type: button }
+  rb:      { address: /xbox/btn/rb,       type: button }
+  back:    { address: /xbox/btn/back,     type: button }
+  start:   { address: /xbox/btn/start,    type: button }
+  l3:      { address: /xbox/btn/l3,       type: button }
+  r3:      { address: /xbox/btn/r3,       type: button }
+  dpad_x:  { address: /xbox/dpad/x,       type: hat_x }
+  dpad_y:  { address: /xbox/dpad/y,       type: hat_y }
+  left_x:  { address: /xbox/stick/left/x, type: axis }
+  left_y:  { address: /xbox/stick/left/y, type: axis }
+  right_x: { address: /xbox/stick/right/x, type: axis }
+  right_y: { address: /xbox/stick/right/y, type: axis }
+  lt:      { address: /xbox/trigger/left, type: trigger }
+  rt:      { address: /xbox/trigger/right, type: trigger }
