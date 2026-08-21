@@ -19,9 +19,9 @@ from stickosc import (
 class MeterBar(ttk.Frame):
     """Simple horizontal meter; bipolar if center=True.
 
-    Uses composition (not Canvas subclass) — Canvas subclass + delete()
-    during __init__ crashes on some Windows/PyInstaller tk builds
-    with: TclError: invalid command name \"180\".
+    IMPORTANT: do not store size as ``self._w`` / ``self._h`` — those names
+    are reserved by tkinter for the Tcl widget path. Overwriting them makes
+    Windows crash with: TclError: invalid command name \"180\".
     """
 
     def __init__(
@@ -33,20 +33,20 @@ class MeterBar(ttk.Frame):
         center: bool = False,
     ) -> None:
         super().__init__(master)
-        self._w = int(width)
-        self._h = int(height)
+        self._bar_w = int(width)
+        self._bar_h = int(height)
         self._center = bool(center)
         self._value = 0.0
         self._canvas = tk.Canvas(
             self,
-            width=self._w,
-            height=self._h,
+            width=self._bar_w,
+            height=self._bar_h,
             highlightthickness=0,
             bg="#1e1e1e",
             borderwidth=0,
         )
         self._canvas.pack()
-        # Defer first paint until widget exists in Tcl (Windows-safe)
+        # Defer first paint until widget exists in Tcl
         self.after_idle(self.redraw)
 
     def set_value(self, value: float) -> None:
@@ -61,19 +61,19 @@ class MeterBar(ttk.Frame):
             c.delete("all")
         except tk.TclError:
             return
-        c.create_rectangle(0, 0, self._w, self._h, fill="#2a2a2a", outline="")
+        c.create_rectangle(0, 0, self._bar_w, self._bar_h, fill="#2a2a2a", outline="")
         if self._center:
-            mid = self._w // 2
-            c.create_line(mid, 0, mid, self._h, fill="#666666")
-            fill_w = int(abs(self._value) * (self._w / 2))
+            mid = self._bar_w // 2
+            c.create_line(mid, 0, mid, self._bar_h, fill="#666666")
+            fill_w = int(abs(self._value) * (self._bar_w / 2))
             if self._value >= 0:
-                c.create_rectangle(mid, 1, mid + fill_w, self._h - 1, fill="#3db8a8", outline="")
+                c.create_rectangle(mid, 1, mid + fill_w, self._bar_h - 1, fill="#3db8a8", outline="")
             else:
-                c.create_rectangle(mid - fill_w, 1, mid, self._h - 1, fill="#3db8a8", outline="")
+                c.create_rectangle(mid - fill_w, 1, mid, self._bar_h - 1, fill="#3db8a8", outline="")
         else:
             v = max(0.0, self._value)
-            fill_w = int(v * self._w)
-            c.create_rectangle(0, 1, fill_w, self._h - 1, fill="#3db8a8", outline="")
+            fill_w = int(v * self._bar_w)
+            c.create_rectangle(0, 1, fill_w, self._bar_h - 1, fill="#3db8a8", outline="")
 
 
 class StickOscApp(ttk.Frame):
