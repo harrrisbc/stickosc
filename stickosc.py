@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""StickOSC — map an Xbox controller to OSC and/or MIDI messages."""
+"""StickOSC — map Xbox / PS5 controllers to OSC and/or MIDI messages."""
 
 from __future__ import annotations
 
@@ -15,35 +15,68 @@ import yaml
 from pythonosc import udp_client
 
 # ---------------------------------------------------------------------------
-# Defaults / Xbox layout (SDL / pygame)
+# Defaults / controller layouts (SDL / pygame joystick indices)
 # ---------------------------------------------------------------------------
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_CONFIG = HERE / "mapping.yaml"
 
-# Common Xbox / XInput button indices under pygame
-BTN = {
-    "a": 0,
-    "b": 1,
-    "x": 2,
-    "y": 3,
-    "lb": 4,
-    "rb": 5,
-    "back": 6,
-    "start": 7,
-    "l3": 8,
-    "r3": 9,
+# Logical control names stay stable across layouts so mapping.yaml keeps working.
+# PS5 face synonyms: Cross→a, Circle→b, Square→x, Triangle→y.
+LAYOUTS: dict[str, dict[str, Any]] = {
+    "xbox": {
+        "btn": {
+            "a": 0,
+            "b": 1,
+            "x": 2,
+            "y": 3,
+            "lb": 4,
+            "rb": 5,
+            "back": 6,
+            "start": 7,
+            "l3": 8,
+            "r3": 9,
+        },
+        "axis": {
+            "left_x": 0,
+            "left_y": 1,
+            "right_x": 2,
+            "right_y": 3,
+            "lt": 4,
+            "rt": 5,
+        },
+        # D-pad via hat 0 when present
+        "dpad_buttons": None,
+    },
+    # DualSense / DualShock-style indices commonly reported by pygame on macOS/Linux.
+    # L1/R1 and Create/Options differ from Xbox; sticks/triggers usually match.
+    "ps5": {
+        "btn": {
+            "a": 0,  # Cross
+            "b": 1,  # Circle
+            "x": 2,  # Square
+            "y": 3,  # Triangle
+            "back": 4,  # Create / Share
+            "start": 6,  # Options
+            "l3": 7,
+            "r3": 8,
+            "lb": 9,  # L1
+            "rb": 10,  # R1
+        },
+        "axis": {
+            "left_x": 0,
+            "left_y": 1,
+            "right_x": 2,
+            "right_y": 3,
+            "lt": 4,  # L2
+            "rt": 5,  # R2
+        },
+        # Used when the pad exposes D-pad as buttons instead of a hat
+        "dpad_buttons": {"up": 11, "right": 12, "down": 13, "left": 14},
+    },
 }
 
-# Axis layout varies slightly by OS; this matches typical Xbox pads on Windows/macOS/Linux
-AXIS = {
-    "left_x": 0,
-    "left_y": 1,
-    "right_x": 2,
-    "right_y": 3,
-    "lt": 4,
-    "rt": 5,
-}
+VALID_LAYOUTS = ("auto", "xbox", "ps5")
 
 EPSILON = 0.001
 POLL_HZ = 60
@@ -64,6 +97,7 @@ midi:
 controller:
   index: 0
   deadzone: 0.12
+  layout: auto
 
 map:
   a:       { address: /xbox/btn/a,         type: button,  midi: { kind: note, note: 60 } }
@@ -143,7 +177,41 @@ def load_config(path: Path) -> dict[str, Any]:
     data["midi"].setdefault("channel", 1)
     data["controller"].setdefault("index", 0)
     data["controller"].setdefault("deadzone", 0.12)
+    data["controller"].setdefault("layout", "auto")
     return data
+
+
+def detect_layout(joy_name: str | None) -> str:
+    """Guess xbox vs ps5 from the pygame joystick name."""
+    if not joy_name:
+        return "xbox"
+    n = joy_name.lower()
+    if any(k in n for k in ("xbox", "x-box", "xinput")):
+        return "xbox"
+    if any(
+        k in n
+        for k in (
+            "dualsense",
+            "dual sense",
+            "dualshock",
+            "dual shock",
+            "ps5",
+            "ps4",
+            "playstation",
+        )
+    ):
+        return "ps5"
+    # Bare "Wireless Controller" is the classic Sony BT name (not Xbox Wireless…)
+    if "wireless controller" in n:
+        return "ps5"
+    return "xbox"
+
+
+def resolve_layout(preference: str, joy_name: str | None) -> str:
+    pref = (preference or "auto").lower()
+    if pref in ("xbox", "ps5"):
+        return pref
+    return detect_layout(joy_name)
 
 
 # ---------------------------------------------------------------------------
@@ -205,19 +273,23 @@ def open_joystick(index: int):
     return joy
 
 
-def read_controls(joy, deadzone: float) -> dict[str, float]:
+def read_controls(joy, deadzone: float, layout: str = "xbox") -> dict[str, float]:
     values: dict[str, float] = {}
+    profile = LAYOUTS.get(layout) or LAYOUTS["xbox"]
+    btn_map: dict[str, int] = profile["btn"]
+    axis_map: dict[str, int] = profile["axis"]
+    dpad_buttons: dict[str, int] | None = profile.get("dpad_buttons")
 
     # buttons
     nbtn = joy.get_numbuttons()
-    for name, idx in BTN.items():
+    for name, idx in btn_map.items():
         values[name] = 1.0 if (idx < nbtn and joy.get_button(idx)) else 0.0
 
     # axes
     naxis = joy.get_numaxes()
 
     def axis(name: str, default: float = 0.0) -> float:
-        idx = AXIS[name]
+        idx = axis_map[name]
         if idx >= naxis:
             return default
         return float(joy.get_axis(idx))
@@ -235,12 +307,25 @@ def read_controls(joy, deadzone: float) -> dict[str, float]:
         values["lt"] = 0.0
         values["rt"] = 0.0
 
-    # D-pad (hat)
+    # D-pad (hat preferred; PS5 may expose buttons instead)
     dx, dy = 0.0, 0.0
     if joy.get_numhats() > 0:
         hx, hy = joy.get_hat(0)
         dx = float(hx)  # L=-1 R=+1
         dy = float(hy)  # pygame: U=+1 D=-1 already
+    elif dpad_buttons:
+        up = dpad_buttons.get("up", -1)
+        down = dpad_buttons.get("down", -1)
+        left = dpad_buttons.get("left", -1)
+        right = dpad_buttons.get("right", -1)
+        if 0 <= up < nbtn and joy.get_button(up):
+            dy = 1.0
+        elif 0 <= down < nbtn and joy.get_button(down):
+            dy = -1.0
+        if 0 <= left < nbtn and joy.get_button(left):
+            dx = -1.0
+        elif 0 <= right < nbtn and joy.get_button(right):
+            dx = 1.0
     values["dpad_x"] = dx
     values["dpad_y"] = dy
 
@@ -309,6 +394,8 @@ def render_status(
     ansi: Ansi,
     *,
     joy_name: str | None,
+    layout: str,
+    layout_source: str,
     osc_line: str,
     midi_line: str,
     config_name: str,
@@ -331,11 +418,16 @@ def render_status(
         num = ansi.hot(f"{v:5.2f}") if active else ansi.dim(f"{v:5.2f}")
         return f"  {lab} {bar}  {num}"
 
+    if layout == "ps5":
+        face_labels = ["✕", "○", "□", "△", "L1", "R1", "Cre", "Opt", "L3", "R3"]
+    else:
+        face_labels = ["A", "B", "X", "Y", "LB", "RB", "▢", "≡", "L3", "R3"]
+
     buttons = button_row(
         values,
         ansi,
         ["a", "b", "x", "y", "lb", "rb", "back", "start", "l3", "r3"],
-        ["A", "B", "X", "Y", "LB", "RB", "▢", "≡", "L3", "R3"],
+        face_labels,
     )
     dpad = dpad_glyph(values)
     dpad_s = ansi.hot(f"D-pad  {dpad}") if dpad != "·" else ansi.dim(f"D-pad  {dpad}")
@@ -345,10 +437,13 @@ def render_status(
     else:
         pulse = ansi.hot("●") if sent_pulse else ansi.dim("○")
 
+    layout_note = f"{layout}" if layout_source == layout else f"{layout} ({layout_source})"
+
     lines = [
-        "StickOSC  ·  Xbox → OSC / MIDI",
+        "StickOSC  ·  Pad → OSC / MIDI",
         rule,
         ctrl,
+        f"layout      {layout_note}",
         f"OSC         {osc_line}",
         f"MIDI        {midi_line}",
         f"config      {config_name}",
@@ -365,7 +460,7 @@ def render_status(
         f"listening… {pulse}  Ctrl+C to quit",
     ]
     if not joy_name:
-        lines.insert(-1, ansi.warn("  plug in an Xbox controller…"))
+        lines.insert(-1, ansi.warn("  plug in an Xbox or PS5 controller…"))
     return "\n".join(lines)
 
 
@@ -591,12 +686,18 @@ def demo_values(t: float) -> dict[str, float]:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="stickosc",
-        description="StickOSC maps your Xbox pad to OSC and/or MIDI (remap in YAML).",
+        description="StickOSC maps Xbox / PS5 pads to OSC and/or MIDI (remap in YAML).",
     )
     p.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="path to mapping.yaml")
     p.add_argument("--host", default=None, help="OSC host (overrides config)")
     p.add_argument("--port", type=int, default=None, help="OSC port (overrides config)")
     p.add_argument("--index", type=int, default=None, help="controller index (overrides config)")
+    p.add_argument(
+        "--layout",
+        choices=VALID_LAYOUTS,
+        default=None,
+        help="controller layout: auto (default), xbox, or ps5",
+    )
     p.add_argument("--demo", action="store_true", help="simulate pad motion without hardware")
     p.add_argument("--static", action="store_true", help="disable pulse animation")
     p.add_argument("--verbose", action="store_true", help="print button events to stderr")
@@ -639,6 +740,10 @@ def main() -> int:
     port = int(args.port if args.port is not None else cfg["osc"]["port"])
     index = int(args.index if args.index is not None else cfg["controller"]["index"])
     deadzone = float(cfg["controller"]["deadzone"])
+    layout_pref = (args.layout or str(cfg["controller"].get("layout", "auto"))).lower()
+    if layout_pref not in VALID_LAYOUTS:
+        print(f"unknown layout {layout_pref!r}; using auto", file=sys.stderr)
+        layout_pref = "auto"
     mapping = cfg["map"]
     midi_port_name = args.midi_port or str(cfg["midi"].get("port", "StickOSC"))
     midi_channel = int(
@@ -674,6 +779,10 @@ def main() -> int:
 
     joy = None if args.demo else open_joystick(index)
     joy_name = "Demo Pad" if args.demo else (joy.get_name() if joy else None)
+    if args.demo:
+        active_layout = layout_pref if layout_pref in ("xbox", "ps5") else "xbox"
+    else:
+        active_layout = resolve_layout(layout_pref, joy_name)
 
     values = {k: 0.0 for k in mapping}
     last_redraw = 0.0
@@ -715,6 +824,8 @@ def main() -> int:
         frame = render_status(
             ansi,
             joy_name=joy_name,
+            layout=active_layout,
+            layout_source=layout_pref,
             osc_line=osc_line(),
             midi_line=midi_line(),
             config_name=args.config.name,
@@ -732,20 +843,26 @@ def main() -> int:
             if args.demo:
                 values = demo_values(now - t0)
                 joy_name = "Demo Pad"
+                if layout_pref in ("xbox", "ps5"):
+                    active_layout = layout_pref
+                else:
+                    active_layout = "xbox"
             else:
                 # reconnect if unplugged
                 if joy is None:
                     joy = open_joystick(index)
                     joy_name = joy.get_name() if joy else None
+                    active_layout = resolve_layout(layout_pref, joy_name)
                 else:
                     try:
                         # get_name raises if disconnected on some platforms
-                        _ = joy.get_name()
-                        values = read_controls(joy, deadzone)
                         joy_name = joy.get_name()
+                        active_layout = resolve_layout(layout_pref, joy_name)
+                        values = read_controls(joy, deadzone, active_layout)
                     except pygame.error:
                         joy = None
                         joy_name = None
+                        active_layout = resolve_layout(layout_pref, None)
                         values = {k: 0.0 for k in mapping}
 
             sent = False
@@ -773,6 +890,8 @@ def main() -> int:
                 frame = render_status(
                     ansi,
                     joy_name=joy_name,
+                    layout=active_layout,
+                    layout_source=layout_pref,
                     osc_line=osc_line(),
                     midi_line=midi_line(),
                     config_name=args.config.name,

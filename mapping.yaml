@@ -13,6 +13,7 @@ midi:
 controller:
   index: 0
   deadzone: 0.12
+  layout: auto
 
 map:
   a:       { address: /xbox/btn/a,         type: button,  midi: { kind: note, note: 60 } }

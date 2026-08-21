@@ -1,6 +1,6 @@
 # StickOSC
 
-Maps your Xbox controller to **OSC** and/or **MIDI** messages you can remap in a YAML file.
+Maps your **Xbox** or **PS5 (DualSense)** controller to **OSC** and/or **MIDI** messages you can remap in a YAML file.
 
 Works with TouchDesigner, Max/MSP, Unreal, Processing, Ableton, Bitwig, and any OSC / MIDI listener.
 
@@ -12,18 +12,43 @@ pip install -r requirements.txt
 python stickosc.py
 ```
 
-Plug in an Xbox (or compatible) pad first. You should see a live status board:
+Plug in an Xbox or PS5 pad first. You should see a live status board:
 
 ```
-StickOSC  ·  Xbox → OSC / MIDI
+StickOSC  ·  Pad → OSC / MIDI
 ────────────────────────────────────────
-controller  Xbox Controller #0          ✓
+controller  DualSense Wireless Contro…  ✓
+layout      ps5 (auto)
 OSC         127.0.0.1:9000
 MIDI        off
 ...
 ```
 
 Default OSC target: **`127.0.0.1:9000`**
+
+## Controllers (Xbox + PS5)
+
+StickOSC auto-detects the pad from its name and picks a button/axis **layout**.
+
+| Logical key | Xbox | PS5 |
+|-------------|------|-----|
+| `a` / `b` / `x` / `y` | A B X Y | Cross Circle Square Triangle |
+| `lb` / `rb` | LB RB | L1 R1 |
+| `lt` / `rt` | LT RT | L2 R2 |
+| `back` / `start` | Back/View Start/Menu | Create Options |
+| `l3` / `r3` | stick clicks | stick clicks |
+
+OSC addresses stay under `/xbox/...` by default so existing patches keep working — remap in YAML if you want `/ps5/...`.
+
+```bash
+# force a layout if auto-detect is wrong
+python stickosc.py --layout ps5
+python stickosc.py --layout xbox
+
+# or in mapping.yaml
+# controller:
+#   layout: auto   # or xbox / ps5
+```
 
 ## MIDI output
 
@@ -69,6 +94,7 @@ lt: { address: /xbox/trigger/left, type: trigger, midi: { kind: cc, cc: 11 } }
 ```bash
 python stickosc.py --demo
 python stickosc.py --demo --midi
+python stickosc.py --demo --layout ps5
 ```
 
 Simulates stick / trigger motion so you can verify OSC / MIDI without hardware.
@@ -81,6 +107,7 @@ Simulates stick / trigger motion so you can verify OSC / MIDI without hardware.
 | `--port 8000` | OSC destination port |
 | `--config path.yaml` | custom mapping file |
 | `--index 0` | which pad (if several) |
+| `--layout auto\|xbox\|ps5` | controller button/axis layout |
 | `--demo` | simulate inputs |
 | `--midi` | enable MIDI output |
 | `--no-midi` | disable MIDI |
@@ -124,5 +151,6 @@ python tools/midi_listen.py --port StickOSC
 - Stick deadzone default: `0.12` (in `mapping.yaml`)
 - Sends **only on change** (not a flood every frame)
 - MIDI uses **mido** + **python-rtmidi** (virtual port on most OSes)
+- PS5 touchpad / gyro / adaptive triggers are not mapped yet
 - `Ctrl+C` to quit cleanly (also sends MIDI All Notes Off)
 - Set `NO_COLOR=1` to disable ANSI colours
