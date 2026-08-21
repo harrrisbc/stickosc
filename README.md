@@ -24,21 +24,35 @@ Controls: Start/Stop, OSC host/port, MIDI on/off, layout (`auto`/`xbox`/`ps5`), 
 
 ### Standalone app (Mac / Windows)
 
-Build on the target OS (PyInstaller cannot cross-compile):
+**Mac — clone from GitHub + build (one shot):**
 
 ```bash
-# macOS → dist/StickOSC.app
+curl -fsSL https://raw.githubusercontent.com/harrrisbc/stickosc/cursor/gui-standalone-app-5a6a/tools/clone_and_build_mac.sh | bash
+```
+
+This clones into `~/stickosc`, installs deps in a venv, and builds `~/stickosc/dist/StickOSC.app`.
+
+Or step by step:
+
+```bash
+# already have the repo
 chmod +x tools/build_mac.sh
 ./tools/build_mac.sh
 open dist/StickOSC.app
 
-# Windows (cmd) → dist\StickOSC.exe
+# clone + build helper (from anywhere on a Mac)
+chmod +x tools/clone_and_build_mac.sh
+./tools/clone_and_build_mac.sh
+# optional: BRANCH=main DEST=~/src/stickosc ./tools/clone_and_build_mac.sh
+```
+
+**Windows (cmd) → `dist\StickOSC.exe`:**
+
+```bat
 tools\build_win.bat
 ```
 
-The Mac script creates a local `.venv`, installs deps, and builds `dist/StickOSC.app` via `stickosc.macos.spec`.
-
-Frozen apps store user config at `~/.stickosc/mapping.yaml` (copied from the bundled default on first run).
+The Mac build uses `stickosc.macos.spec`. Frozen apps store user config at `~/.stickosc/mapping.yaml` (copied from the bundled default on first run).
 
 Plug in an Xbox or PS5 pad first. CLI mode shows a live status board:
 
