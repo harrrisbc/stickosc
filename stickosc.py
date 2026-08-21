@@ -13,6 +13,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+# Must be set before pygame/SDL loads — otherwise macOS GUI apps often freeze.
+os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+
 import pygame
 import yaml
 from pythonosc import udp_client
@@ -754,7 +759,12 @@ def save_config_settings(path: Path, settings: EngineSettings, base: dict[str, A
 
 
 class StickEngine:
-    """Poll controller and send OSC/MIDI; usable from CLI or a GUI thread."""
+    """Poll controller and send OSC/MIDI.
+
+    CLI uses ``run_blocking()``.
+    GUI should use ``begin()`` / ``poll()`` / ``end()`` on the **main thread**
+    (macOS deadlocks if pygame/SDL runs on a background thread).
+    """
 
     def __init__(self, settings: EngineSettings) -> None:
         self.settings = settings
@@ -775,6 +785,18 @@ class StickEngine:
             config_name=settings.config_path.name,
         )
         self._pygame_ready = False
+        self._osc: OscBridge | None = None
+        self._midi: MidiBridge | None = None
+        self._joy = None
+        self._mapping: dict[str, Any] = {}
+        self._layout_pref = settings.layout_pref
+        self._t0 = 0.0
+        self._last_frame = 0.0
+        self._coop = False
+
+    @property
+    def active(self) -> bool:
+        return self._coop or (self._thread is not None and self._thread.is_alive())
 
     def get_snapshot(self) -> EngineSnapshot:
         with self._lock:
@@ -799,13 +821,17 @@ class StickEngine:
                 setattr(self._snapshot, key, value)
 
     def start(self) -> None:
-        if self._thread and self._thread.is_alive():
+        """Background-thread mode (avoid on macOS GUI — use begin/poll/end)."""
+        if self._coop or (self._thread and self._thread.is_alive()):
             return
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="StickEngine", daemon=True)
         self._thread.start()
 
     def stop(self, timeout: float = 2.0) -> None:
+        if self._coop:
+            self.end()
+            return
         self._stop.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=timeout)
@@ -822,148 +848,222 @@ class StickEngine:
         finally:
             self._publish(running=False)
 
+    def begin(self) -> None:
+        """Start cooperative mode (call poll() from the UI main loop)."""
+        if self._coop:
+            return
+        self.stop(timeout=0.5)
+        self._coop = True
+        self._stop.clear()
+        code = self._setup()
+        if code != 0:
+            self._coop = False
+            self._teardown()
+            return
+        self._t0 = time.monotonic()
+        self._last_frame = 0.0
+        self._publish(running=True)
+
+    def poll(self) -> EngineSnapshot:
+        """One poll iteration for cooperative/GUI mode."""
+        if not self._coop:
+            return self.get_snapshot()
+        try:
+            self._tick_once(force_publish=True)
+        except Exception as exc:
+            self._publish(error=str(exc), running=False)
+            self.end()
+        return self.get_snapshot()
+
+    def end(self) -> None:
+        """Stop cooperative mode and release devices."""
+        self._coop = False
+        self._stop.set()
+        self._teardown()
+        self._publish(running=False, sent_pulse=False)
+
     def _init_pygame(self) -> None:
+        # Dummy video+audio avoids macOS hangs (CoreAudio / display init).
         os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
-        pygame.init()
-        pygame.joystick.init()
+        os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+        os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+        # Need full init so event.pump() works; dummy drivers keep it headless.
+        if not pygame.get_init():
+            pygame.init()
+        if not pygame.joystick.get_init():
+            pygame.joystick.init()
         self._pygame_ready = True
 
-    def _run(self, on_frame: Any | None = None) -> int:
+    def _setup(self) -> int:
         settings = self.settings
         cfg = load_config(settings.config_path)
-        mapping = cfg["map"]
-        deadzone = float(settings.deadzone)
+        self._mapping = cfg["map"]
         layout_pref = settings.layout_pref if settings.layout_pref in VALID_LAYOUTS else "auto"
+        self._layout_pref = layout_pref
 
         if not settings.osc_enabled and not settings.midi_enabled:
             self._publish(running=False, error="enable OSC and/or MIDI")
             return 2
 
-        osc: OscBridge | None = None
-        midi: MidiBridge | None = None
         error: str | None = None
+        self._osc = None
+        self._midi = None
 
         if settings.osc_enabled:
-            osc = OscBridge(settings.host, int(settings.port), mapping)
+            self._osc = OscBridge(settings.host, int(settings.port), self._mapping)
 
         if settings.midi_enabled:
             try:
-                midi = MidiBridge(settings.midi_port, int(settings.midi_channel), mapping)
+                self._midi = MidiBridge(settings.midi_port, int(settings.midi_channel), self._mapping)
             except Exception as exc:
                 error = f"MIDI open failed: {exc}"
                 if not settings.osc_enabled:
                     self._publish(running=False, error=error)
                     return 1
-                midi = None
+                self._midi = None
 
-        self._init_pygame()
-        joy = None if settings.demo else open_joystick(settings.index)
-        joy_name = "Demo Pad" if settings.demo else (joy.get_name() if joy else None)
+        try:
+            self._init_pygame()
+        except Exception as exc:
+            self._publish(running=False, error=f"pygame init failed: {exc}")
+            return 1
+
+        self._joy = None if settings.demo else open_joystick(settings.index)
+        joy_name = "Demo Pad" if settings.demo else (self._joy.get_name() if self._joy else None)
         if settings.demo:
             active_layout = layout_pref if layout_pref in ("xbox", "ps5") else "xbox"
         else:
             active_layout = resolve_layout(layout_pref, joy_name)
 
-        values = {k: 0.0 for k in mapping}
-        t0 = time.monotonic()
-        last_frame = 0.0
-
-        def osc_line() -> str:
-            return "off" if osc is None else osc.label
-
-        def midi_line() -> str:
-            if midi is None:
-                return "off"
-            return f"ch{settings.midi_channel} → {midi.label}"
-
+        values = {k: 0.0 for k in self._mapping}
+        osc_line = "off" if self._osc is None else self._osc.label
+        midi_line = (
+            "off"
+            if self._midi is None
+            else f"ch{settings.midi_channel} → {self._midi.label}"
+        )
         self._publish(
             running=True,
             joy_name=joy_name,
             layout=active_layout,
             layout_pref=layout_pref,
             values=dict(values),
-            osc_line=osc_line(),
-            midi_line=midi_line(),
+            osc_line=osc_line,
+            midi_line=midi_line,
             sent_pulse=False,
             error=error,
-            deadzone=deadzone,
+            deadzone=float(settings.deadzone),
             config_name=settings.config_path.name,
         )
+        return 0
 
+    def _teardown(self) -> None:
+        if self._midi is not None:
+            try:
+                self._midi.close()
+            except Exception:
+                pass
+            self._midi = None
+        self._osc = None
+        self._joy = None
+        if self._pygame_ready:
+            try:
+                if pygame.get_init():
+                    pygame.quit()
+            except Exception:
+                pass
+            self._pygame_ready = False
+
+    def _tick_once(self, *, force_publish: bool = False, on_frame: Any | None = None) -> None:
+        settings = self.settings
+        mapping = self._mapping
+        deadzone = float(settings.deadzone)
+        layout_pref = self._layout_pref
+        osc = self._osc
+        midi = self._midi
+        now = time.monotonic()
+
+        pygame.event.pump()
+
+        if settings.demo:
+            values = demo_values(now - self._t0)
+            joy_name = "Demo Pad"
+            active_layout = layout_pref if layout_pref in ("xbox", "ps5") else "xbox"
+        else:
+            if self._joy is None:
+                self._joy = open_joystick(settings.index)
+                joy_name = self._joy.get_name() if self._joy else None
+                active_layout = resolve_layout(layout_pref, joy_name)
+                values = {k: 0.0 for k in mapping}
+            else:
+                try:
+                    joy_name = self._joy.get_name()
+                    active_layout = resolve_layout(layout_pref, joy_name)
+                    values = read_controls(self._joy, deadzone, active_layout)
+                except pygame.error:
+                    self._joy = None
+                    joy_name = None
+                    active_layout = resolve_layout(layout_pref, None)
+                    values = {k: 0.0 for k in mapping}
+
+        sent = False
+        if osc is not None:
+            sent = osc.send_changed(values) or sent
+        if midi is not None:
+            sent = midi.send_changed(values) or sent
+
+        if settings.verbose and sent:
+            for k, v in values.items():
+                if mapping.get(k, {}).get("type") == "button" and v >= 0.5:
+                    addr = mapping[k].get("address", "?")
+                    print(f"[btn] {k}=1 → {addr}", file=sys.stderr)
+
+        pulse = sent
+        if osc is not None and osc.sent_recently:
+            pulse = True
+        if midi is not None and midi.sent_recently:
+            pulse = True
+
+        if force_publish or now - self._last_frame >= 1.0 / REDRAW_HZ:
+            osc_line = "off" if osc is None else osc.label
+            midi_line = (
+                "off" if midi is None else f"ch{settings.midi_channel} → {midi.label}"
+            )
+            self._publish(
+                running=True,
+                joy_name=joy_name,
+                layout=active_layout,
+                layout_pref=layout_pref,
+                values=dict(values),
+                osc_line=osc_line,
+                midi_line=midi_line,
+                sent_pulse=pulse,
+                deadzone=deadzone,
+                config_name=settings.config_path.name,
+            )
+            if on_frame is not None:
+                on_frame(self.get_snapshot())
+            self._last_frame = now
+            if not sent:
+                if osc is not None:
+                    osc.sent_recently = False
+                if midi is not None:
+                    midi.sent_recently = False
+
+    def _run(self, on_frame: Any | None = None) -> int:
+        code = self._setup()
+        if code != 0:
+            self._teardown()
+            return code
+        self._t0 = time.monotonic()
+        self._last_frame = 0.0
         try:
             while not self._stop.is_set():
-                now = time.monotonic()
-                pygame.event.pump()
-
-                if settings.demo:
-                    values = demo_values(now - t0)
-                    joy_name = "Demo Pad"
-                    active_layout = layout_pref if layout_pref in ("xbox", "ps5") else "xbox"
-                else:
-                    if joy is None:
-                        joy = open_joystick(settings.index)
-                        joy_name = joy.get_name() if joy else None
-                        active_layout = resolve_layout(layout_pref, joy_name)
-                    else:
-                        try:
-                            joy_name = joy.get_name()
-                            active_layout = resolve_layout(layout_pref, joy_name)
-                            values = read_controls(joy, deadzone, active_layout)
-                        except pygame.error:
-                            joy = None
-                            joy_name = None
-                            active_layout = resolve_layout(layout_pref, None)
-                            values = {k: 0.0 for k in mapping}
-
-                sent = False
-                if osc is not None:
-                    sent = osc.send_changed(values) or sent
-                if midi is not None:
-                    sent = midi.send_changed(values) or sent
-
-                if settings.verbose and sent:
-                    for k, v in values.items():
-                        if mapping.get(k, {}).get("type") == "button" and v >= 0.5:
-                            addr = mapping[k].get("address", "?")
-                            print(f"[btn] {k}=1 → {addr}", file=sys.stderr)
-
-                pulse = sent
-                if osc is not None and osc.sent_recently:
-                    pulse = True
-                if midi is not None and midi.sent_recently:
-                    pulse = True
-
-                if now - last_frame >= 1.0 / REDRAW_HZ:
-                    self._publish(
-                        running=True,
-                        joy_name=joy_name,
-                        layout=active_layout,
-                        layout_pref=layout_pref,
-                        values=dict(values),
-                        osc_line=osc_line(),
-                        midi_line=midi_line(),
-                        sent_pulse=pulse,
-                        error=error,
-                        deadzone=deadzone,
-                        config_name=settings.config_path.name,
-                    )
-                    if on_frame is not None:
-                        on_frame(self.get_snapshot())
-                    last_frame = now
-                    if not sent:
-                        if osc is not None:
-                            osc.sent_recently = False
-                        if midi is not None:
-                            midi.sent_recently = False
-
+                self._tick_once(on_frame=on_frame)
                 time.sleep(1.0 / POLL_HZ)
             return 0
         finally:
-            if midi is not None:
-                midi.close()
-            if self._pygame_ready:
-                pygame.quit()
-                self._pygame_ready = False
+            self._teardown()
             self._publish(running=False, sent_pulse=False)
 
 

@@ -240,15 +240,28 @@ class StickOscApp(ttk.Frame):
         except Exception as exc:
             messagebox.showwarning("StickOSC", f"Could not save config: {exc}")
 
-        self.engine = StickEngine(settings)
-        self.engine.start()
+        try:
+            self.engine = StickEngine(settings)
+            # Main-thread coop mode — required on macOS (threaded pygame freezes the app)
+            self.engine.begin()
+            snap = self.engine.get_snapshot()
+            if snap.error and not snap.running:
+                messagebox.showerror("StickOSC", snap.error)
+                self.engine.end()
+                self.engine = None
+                return
+        except Exception as exc:
+            messagebox.showerror("StickOSC", f"Failed to start: {exc}")
+            self.engine = None
+            return
+
         self.start_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
         self.status_var.set("Running…")
 
     def _on_stop(self) -> None:
         if self.engine:
-            self.engine.stop()
+            self.engine.end()
             self.engine = None
         self.start_btn.configure(state="normal")
         self.stop_btn.configure(state="disabled")
@@ -266,7 +279,18 @@ class StickOscApp(ttk.Frame):
 
     def _tick(self) -> None:
         if self.engine:
-            snap = self.engine.get_snapshot()
+            # Drive engine on the UI thread (macOS-safe)
+            if self.engine.active:
+                try:
+                    snap = self.engine.poll()
+                except Exception as exc:
+                    self.status_var.set(f"Error: {exc}")
+                    self._on_stop()
+                    self.after(16, self._tick)
+                    return
+            else:
+                snap = self.engine.get_snapshot()
+
             name = snap.joy_name or "(none)"
             self.ctrl_var.set(f"controller: {name}")
             src = snap.layout_pref
@@ -303,7 +327,7 @@ class StickOscApp(ttk.Frame):
                     self.status_var.set(snap.error)
                 else:
                     self.status_var.set("Stopped")
-        self.after(50, self._tick)
+        self.after(16, self._tick)
 
     def _on_close(self) -> None:
         self._on_stop()
@@ -311,7 +335,15 @@ class StickOscApp(ttk.Frame):
 
 
 def run(config_path: Path | None = None) -> int:
+    # Set SDL dummies before pygame gets imported via stickosc side effects on Start
+    import os
+
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+    os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+
     root = tk.Tk()
+    root.title("StickOSC")
     # Prefer a readable default theme
     try:
         style = ttk.Style()

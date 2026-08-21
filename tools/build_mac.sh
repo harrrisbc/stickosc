@@ -150,4 +150,8 @@ echo
 echo "First launch: if Gatekeeper blocks it,"
 echo "  right-click StickOSC.app → Open  (or System Settings → Privacy & Security)"
 echo
+echo "If the app beachballs / Not Responding, rebuild after pull:"
+echo "  cd ~/stickosc && git pull && rm -rf .venv dist build"
+echo "  PYTHON=python3.12 ./tools/build_mac.sh"
+echo
 echo "Config file (after first run): ~/.stickosc/mapping.yaml"
