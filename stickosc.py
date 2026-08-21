@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""StickOSC — map an Xbox controller to OSC messages."""
+"""StickOSC — map an Xbox controller to OSC and/or MIDI messages."""
 
 from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import sys
 import time
 from pathlib import Path
@@ -50,35 +49,41 @@ EPSILON = 0.001
 POLL_HZ = 60
 REDRAW_HZ = 30
 
-DEFAULT_YAML = """# StickOSC config — remap by changing `address` only
+DEFAULT_YAML = """# StickOSC config — remap OSC `address` and optional `midi` per control
 osc:
+  enabled: true
   host: 127.0.0.1
   port: 9000
   prefix: /xbox
+
+midi:
+  enabled: false
+  port: StickOSC
+  channel: 1
 
 controller:
   index: 0
   deadzone: 0.12
 
 map:
-  a:       { address: /xbox/btn/a,         type: button }
-  b:       { address: /xbox/btn/b,         type: button }
-  x:       { address: /xbox/btn/x,         type: button }
-  y:       { address: /xbox/btn/y,         type: button }
-  lb:      { address: /xbox/btn/lb,        type: button }
-  rb:      { address: /xbox/btn/rb,        type: button }
-  back:    { address: /xbox/btn/back,      type: button }
-  start:   { address: /xbox/btn/start,     type: button }
-  l3:      { address: /xbox/btn/l3,        type: button }
-  r3:      { address: /xbox/btn/r3,        type: button }
-  dpad_x:  { address: /xbox/dpad/x,        type: hat_x }
-  dpad_y:  { address: /xbox/dpad/y,        type: hat_y }
-  left_x:  { address: /xbox/stick/left/x,  type: axis }
-  left_y:  { address: /xbox/stick/left/y,  type: axis }
-  right_x: { address: /xbox/stick/right/x, type: axis }
-  right_y: { address: /xbox/stick/right/y, type: axis }
-  lt:      { address: /xbox/trigger/left,  type: trigger }
-  rt:      { address: /xbox/trigger/right, type: trigger }
+  a:       { address: /xbox/btn/a,         type: button,  midi: { kind: note, note: 60 } }
+  b:       { address: /xbox/btn/b,         type: button,  midi: { kind: note, note: 62 } }
+  x:       { address: /xbox/btn/x,         type: button,  midi: { kind: note, note: 64 } }
+  y:       { address: /xbox/btn/y,         type: button,  midi: { kind: note, note: 65 } }
+  lb:      { address: /xbox/btn/lb,        type: button,  midi: { kind: note, note: 67 } }
+  rb:      { address: /xbox/btn/rb,        type: button,  midi: { kind: note, note: 69 } }
+  back:    { address: /xbox/btn/back,      type: button,  midi: { kind: note, note: 71 } }
+  start:   { address: /xbox/btn/start,     type: button,  midi: { kind: note, note: 72 } }
+  l3:      { address: /xbox/btn/l3,        type: button,  midi: { kind: note, note: 74 } }
+  r3:      { address: /xbox/btn/r3,        type: button,  midi: { kind: note, note: 76 } }
+  dpad_x:  { address: /xbox/dpad/x,        type: hat_x,   midi: { kind: cc, cc: 20 } }
+  dpad_y:  { address: /xbox/dpad/y,        type: hat_y,   midi: { kind: cc, cc: 21 } }
+  left_x:  { address: /xbox/stick/left/x,  type: axis,    midi: { kind: cc, cc: 1 } }
+  left_y:  { address: /xbox/stick/left/y,  type: axis,    midi: { kind: cc, cc: 2 } }
+  right_x: { address: /xbox/stick/right/x, type: axis,    midi: { kind: cc, cc: 3 } }
+  right_y: { address: /xbox/stick/right/y, type: axis,    midi: { kind: cc, cc: 4 } }
+  lt:      { address: /xbox/trigger/left,  type: trigger, midi: { kind: cc, cc: 11 } }
+  rt:      { address: /xbox/trigger/right, type: trigger, midi: { kind: cc, cc: 12 } }
 """
 
 # ---------------------------------------------------------------------------
@@ -126,11 +131,16 @@ def load_config(path: Path) -> dict[str, Any]:
     with path.open(encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     data.setdefault("osc", {})
+    data.setdefault("midi", {})
     data.setdefault("controller", {})
     data.setdefault("map", {})
+    data["osc"].setdefault("enabled", True)
     data["osc"].setdefault("host", "127.0.0.1")
     data["osc"].setdefault("port", 9000)
     data["osc"].setdefault("prefix", "/xbox")
+    data["midi"].setdefault("enabled", False)
+    data["midi"].setdefault("port", "StickOSC")
+    data["midi"].setdefault("channel", 1)
     data["controller"].setdefault("index", 0)
     data["controller"].setdefault("deadzone", 0.12)
     return data
@@ -164,6 +174,19 @@ def normalize_trigger(raw: float) -> float:
 def flip_y(value: float) -> float:
     """pygame Y: down = +1 → StickOSC: up = +1."""
     return -value
+
+
+def clamp_midi(value: int) -> int:
+    return max(0, min(127, int(value)))
+
+
+def float_to_midi_cc(value: float, control_type: str) -> int:
+    """Map normalized controller values to MIDI CC 0..127."""
+    if control_type in ("axis", "hat_x", "hat_y"):
+        # bipolar -1..1 → 0..127 (center ≈ 64)
+        return clamp_midi(round((value + 1.0) * 63.5))
+    # trigger / button-as-cc style: 0..1 → 0..127
+    return clamp_midi(round(max(0.0, min(1.0, value)) * 127.0))
 
 
 # ---------------------------------------------------------------------------
@@ -286,8 +309,8 @@ def render_status(
     ansi: Ansi,
     *,
     joy_name: str | None,
-    host: str,
-    port: int,
+    osc_line: str,
+    midi_line: str,
     config_name: str,
     values: dict[str, float],
     deadzone: float,
@@ -323,10 +346,11 @@ def render_status(
         pulse = ansi.hot("●") if sent_pulse else ansi.dim("○")
 
     lines = [
-        "StickOSC  ·  Xbox → OSC",
+        "StickOSC  ·  Xbox → OSC / MIDI",
         rule,
         ctrl,
-        f"sending to  {host}:{port}",
+        f"OSC         {osc_line}",
+        f"MIDI        {midi_line}",
         f"config      {config_name}",
         rule,
         meter_line("LX", "left_x", "stick"),
@@ -356,6 +380,7 @@ class OscBridge:
         self.mapping = mapping
         self.last: dict[str, float] = {}
         self.sent_recently = False
+        self.label = f"{host}:{port}"
 
     def send_changed(self, values: dict[str, float]) -> bool:
         any_sent = False
@@ -373,6 +398,159 @@ class OscBridge:
                 any_sent = True
         self.sent_recently = any_sent
         return any_sent
+
+
+# ---------------------------------------------------------------------------
+# MIDI send-on-change
+# ---------------------------------------------------------------------------
+
+
+class MidiBridge:
+    """Send note / CC messages on change via mido (+ rtmidi backend)."""
+
+    def __init__(
+        self,
+        port_name: str,
+        channel: int,
+        mapping: dict[str, Any],
+        *,
+        port: Any | None = None,
+    ) -> None:
+        import mido
+
+        self.mido = mido
+        self.mapping = mapping
+        self.channel = max(0, min(15, int(channel) - 1))  # YAML 1..16 → mido 0..15
+        self.last_cc: dict[str, int] = {}
+        self.last_note_on: dict[str, bool] = {}
+        self.sent_recently = False
+        self.port = None
+        self.label = "off"
+        if port is not None:
+            self.port = port
+            self.label = getattr(port, "name", port_name) or port_name
+        else:
+            self._open_port(port_name)
+
+    def _open_port(self, port_name: str) -> None:
+        mido = self.mido
+        try:
+            outputs = mido.get_output_names()
+        except Exception as exc:
+            raise RuntimeError(
+                "MIDI backend unavailable (need a system sequencer such as "
+                f"ALSA/CoreMIDI). Details: {exc}"
+            ) from exc
+
+        # Exact / substring match on an existing output first
+        match = None
+        for name in outputs:
+            if name == port_name or port_name.lower() in name.lower():
+                match = name
+                break
+
+        if match is not None:
+            self.port = mido.open_output(match)
+            self.label = match
+            return
+
+        # Create a virtual port (ALSA/CoreMIDI/JACK depending on OS)
+        try:
+            self.port = mido.open_output(port_name, virtual=True)
+            self.label = f"{port_name} (virtual)"
+        except Exception as exc:
+            raise RuntimeError(
+                f"could not open MIDI port {port_name!r} "
+                f"(available: {outputs or 'none'}): {exc}"
+            ) from exc
+
+    @staticmethod
+    def list_ports() -> list[str]:
+        import mido
+
+        try:
+            return list(mido.get_output_names())
+        except Exception as exc:
+            raise RuntimeError(
+                "MIDI backend unavailable (need ALSA/CoreMIDI). "
+                f"Details: {exc}"
+            ) from exc
+    def send_changed(self, values: dict[str, float]) -> bool:
+        if self.port is None:
+            return False
+        any_sent = False
+        for key, meta in self.mapping.items():
+            if key not in values:
+                continue
+            midi_meta = meta.get("midi")
+            if not midi_meta:
+                continue
+            kind = str(midi_meta.get("kind", "")).lower()
+            value = float(values[key])
+            control_type = str(meta.get("type", "axis"))
+
+            if kind == "note":
+                if self._send_note(key, midi_meta, value):
+                    any_sent = True
+            elif kind == "cc":
+                if self._send_cc(key, midi_meta, value, control_type):
+                    any_sent = True
+        self.sent_recently = any_sent
+        return any_sent
+
+    def _send_note(self, key: str, midi_meta: dict[str, Any], value: float) -> bool:
+        note = clamp_midi(midi_meta.get("note", 60))
+        velocity = clamp_midi(midi_meta.get("velocity", 100))
+        pressed = value >= 0.5
+        was = self.last_note_on.get(key)
+        if was is None:
+            # first sample: only fire if already held
+            self.last_note_on[key] = pressed
+            if not pressed:
+                return False
+        elif was == pressed:
+            return False
+        else:
+            self.last_note_on[key] = pressed
+
+        msg_type = "note_on" if pressed else "note_off"
+        vel = velocity if pressed else 0
+        self.port.send(
+            self.mido.Message(msg_type, note=note, velocity=vel, channel=self.channel)
+        )
+        return True
+
+    def _send_cc(
+        self,
+        key: str,
+        midi_meta: dict[str, Any],
+        value: float,
+        control_type: str,
+    ) -> bool:
+        cc = clamp_midi(midi_meta.get("cc", midi_meta.get("controller", 1)))
+        midi_val = float_to_midi_cc(value, control_type)
+        prev = self.last_cc.get(key)
+        if prev is not None and prev == midi_val:
+            return False
+        self.last_cc[key] = midi_val
+        self.port.send(
+            self.mido.Message("control_change", control=cc, value=midi_val, channel=self.channel)
+        )
+        return True
+
+    def close(self) -> None:
+        if self.port is None:
+            return
+        try:
+            # silence hanging notes
+            self.port.send(self.mido.Message("control_change", control=123, value=0, channel=self.channel))
+        except Exception:
+            pass
+        try:
+            self.port.close()
+        except Exception:
+            pass
+        self.port = None
 
 
 # ---------------------------------------------------------------------------
@@ -413,7 +591,7 @@ def demo_values(t: float) -> dict[str, float]:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="stickosc",
-        description="StickOSC maps your Xbox pad to OSC addresses you can remap in a YAML file.",
+        description="StickOSC maps your Xbox pad to OSC and/or MIDI (remap in YAML).",
     )
     p.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="path to mapping.yaml")
     p.add_argument("--host", default=None, help="OSC host (overrides config)")
@@ -422,21 +600,72 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--demo", action="store_true", help="simulate pad motion without hardware")
     p.add_argument("--static", action="store_true", help="disable pulse animation")
     p.add_argument("--verbose", action="store_true", help="print button events to stderr")
+    p.add_argument("--midi", action="store_true", help="enable MIDI output (overrides config)")
+    p.add_argument("--no-midi", action="store_true", help="disable MIDI output")
+    p.add_argument("--no-osc", action="store_true", help="disable OSC output")
+    p.add_argument("--midi-port", default=None, help="MIDI output port name (or virtual name)")
+    p.add_argument("--midi-channel", type=int, default=None, help="MIDI channel 1-16")
+    p.add_argument("--list-midi-ports", action="store_true", help="list MIDI output ports and exit")
     return p.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+
+    if args.list_midi_ports:
+        try:
+            ports = MidiBridge.list_ports()
+        except Exception as exc:
+            print(f"MIDI backend unavailable: {exc}", file=sys.stderr)
+            return 1
+        if not ports:
+            print("no MIDI output ports found")
+        else:
+            print("MIDI output ports:")
+            for name in ports:
+                print(f"  · {name}")
+        return 0
+
     cfg = load_config(args.config)
+
+    osc_enabled = bool(cfg["osc"].get("enabled", True)) and not args.no_osc
+    midi_enabled = bool(cfg["midi"].get("enabled", False))
+    if args.midi:
+        midi_enabled = True
+    if args.no_midi:
+        midi_enabled = False
 
     host = args.host or cfg["osc"]["host"]
     port = int(args.port if args.port is not None else cfg["osc"]["port"])
     index = int(args.index if args.index is not None else cfg["controller"]["index"])
     deadzone = float(cfg["controller"]["deadzone"])
     mapping = cfg["map"]
+    midi_port_name = args.midi_port or str(cfg["midi"].get("port", "StickOSC"))
+    midi_channel = int(
+        args.midi_channel if args.midi_channel is not None else cfg["midi"].get("channel", 1)
+    )
+
+    if not osc_enabled and not midi_enabled:
+        print("nothing to send: enable OSC and/or MIDI", file=sys.stderr)
+        return 2
 
     ansi = Ansi(use_color() and not args.static)
-    osc = OscBridge(host, port, mapping)
+    osc: OscBridge | None = None
+    midi: MidiBridge | None = None
+
+    if osc_enabled:
+        osc = OscBridge(host, port, mapping)
+
+    if midi_enabled:
+        try:
+            midi = MidiBridge(midi_port_name, midi_channel, mapping)
+        except Exception as exc:
+            print(f"MIDI open failed: {exc}", file=sys.stderr)
+            if not osc_enabled:
+                return 1
+            print("continuing with OSC only…", file=sys.stderr)
+            midi = None
+            midi_enabled = False
 
     # Headless-friendly pygame init (no window)
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
@@ -451,6 +680,16 @@ def main() -> int:
     last_lines = 0
     t0 = time.monotonic()
     interactive = sys.stdout.isatty()
+
+    def osc_line() -> str:
+        if osc is None:
+            return ansi.dim("off")
+        return f"{osc.label}"
+
+    def midi_line() -> str:
+        if midi is None:
+            return ansi.dim("off")
+        return f"ch{midi_channel} → {midi.label}"
 
     def clear_and_print(text: str) -> None:
         nonlocal last_lines
@@ -476,8 +715,8 @@ def main() -> int:
         frame = render_status(
             ansi,
             joy_name=joy_name,
-            host=host,
-            port=port,
+            osc_line=osc_line(),
+            midi_line=midi_line(),
             config_name=args.config.name,
             values=values,
             deadzone=deadzone,
@@ -509,29 +748,46 @@ def main() -> int:
                         joy_name = None
                         values = {k: 0.0 for k in mapping}
 
-            sent = osc.send_changed(values)
+            sent = False
+            if osc is not None:
+                sent = osc.send_changed(values) or sent
+            if midi is not None:
+                sent = midi.send_changed(values) or sent
 
             if args.verbose and sent:
                 for k, v in values.items():
                     if mapping.get(k, {}).get("type") == "button" and v >= 0.5:
-                        print(f"[btn] {k}=1 → {mapping[k]['address']}", file=sys.stderr)
+                        addr = mapping[k].get("address", "?")
+                        midi_meta = mapping[k].get("midi") or {}
+                        extra = ""
+                        if midi is not None and midi_meta.get("kind") == "note":
+                            extra = f"  midi note {midi_meta.get('note')}"
+                        print(f"[btn] {k}=1 → {addr}{extra}", file=sys.stderr)
 
             if now - last_redraw >= 1.0 / REDRAW_HZ:
+                pulse = sent
+                if osc is not None and osc.sent_recently:
+                    pulse = True
+                if midi is not None and midi.sent_recently:
+                    pulse = True
                 frame = render_status(
                     ansi,
                     joy_name=joy_name,
-                    host=host,
-                    port=port,
+                    osc_line=osc_line(),
+                    midi_line=midi_line(),
                     config_name=args.config.name,
                     values=values,
                     deadzone=deadzone,
-                    sent_pulse=sent or osc.sent_recently,
+                    sent_pulse=pulse,
                     static=args.static,
                 )
                 clear_and_print(frame)
                 last_redraw = now
                 if not sent:
-                    osc.sent_recently = False
+                    if osc is not None:
+                        osc.sent_recently = False
+                    if midi is not None:
+                        midi.sent_recently = False
 
             time.sleep(1.0 / POLL_HZ)
     except KeyboardInterrupt:
@@ -540,6 +796,8 @@ def main() -> int:
         print(ansi.dim("StickOSC stopped."))
         return 0
     finally:
+        if midi is not None:
+            midi.close()
         pygame.quit()
 
 

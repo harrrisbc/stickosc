@@ -1,8 +1,8 @@
 # StickOSC
 
-Maps your Xbox controller to OSC messages you can remap in a YAML file.
+Maps your Xbox controller to **OSC** and/or **MIDI** messages you can remap in a YAML file.
 
-Works with TouchDesigner, Max/MSP, Unreal, Processing, and any OSC listener.
+Works with TouchDesigner, Max/MSP, Unreal, Processing, Ableton, Bitwig, and any OSC / MIDI listener.
 
 ## Quick start
 
@@ -15,22 +15,63 @@ python stickosc.py
 Plug in an Xbox (or compatible) pad first. You should see a live status board:
 
 ```
-StickOSC  ·  Xbox → OSC
+StickOSC  ·  Xbox → OSC / MIDI
 ────────────────────────────────────────
 controller  Xbox Controller #0          ✓
-sending to  127.0.0.1:9000
+OSC         127.0.0.1:9000
+MIDI        off
 ...
 ```
 
 Default OSC target: **`127.0.0.1:9000`**
 
+## MIDI output
+
+Enable MIDI (keeps OSC on by default):
+
+```bash
+python stickosc.py --midi
+```
+
+Or set `midi.enabled: true` in `mapping.yaml`.
+
+StickOSC opens / creates a port named **`StickOSC`** (virtual when possible). Point your DAW or synth at that port.
+
+```bash
+# see ports
+python stickosc.py --list-midi-ports
+
+# MIDI only
+python stickosc.py --midi --no-osc
+
+# custom port / channel
+python stickosc.py --midi --midi-port "IAC Driver Bus 1" --midi-channel 2
+```
+
+### Default MIDI map
+
+| Control | MIDI | Range |
+|---------|------|-------|
+| A B X Y / LB RB / Back Start / L3 R3 | Note On/Off (60, 62, 64…) | velocity 100 |
+| Left / right sticks | CC 1–4 | `-1…1` → `0…127` (center ≈ 64) |
+| Triggers LT / RT | CC 11 / 12 | `0…1` → `0…127` |
+| D-pad X / Y | CC 20 / 21 | `-1 / 0 / +1` → `0 / 64 / 127` |
+
+Edit the `midi:` block on each control in `mapping.yaml` — no code edits needed.
+
+```yaml
+a:  { address: /xbox/btn/a, type: button, midi: { kind: note, note: 60, velocity: 100 } }
+lt: { address: /xbox/trigger/left, type: trigger, midi: { kind: cc, cc: 11 } }
+```
+
 ## Demo (no controller)
 
 ```bash
 python stickosc.py --demo
+python stickosc.py --demo --midi
 ```
 
-Simulates stick / trigger motion so you can verify OSC without hardware.
+Simulates stick / trigger motion so you can verify OSC / MIDI without hardware.
 
 ## CLI options
 
@@ -41,6 +82,12 @@ Simulates stick / trigger motion so you can verify OSC without hardware.
 | `--config path.yaml` | custom mapping file |
 | `--index 0` | which pad (if several) |
 | `--demo` | simulate inputs |
+| `--midi` | enable MIDI output |
+| `--no-midi` | disable MIDI |
+| `--no-osc` | disable OSC |
+| `--midi-port NAME` | MIDI output / virtual port name |
+| `--midi-channel N` | MIDI channel 1–16 |
+| `--list-midi-ports` | print MIDI outs and exit |
 | `--verbose` | log button presses |
 | `--static` | no pulse animation |
 
@@ -58,7 +105,7 @@ Edit `mapping.yaml` to change any address — no code edits needed. If the file 
 
 ## Listen test (Python)
 
-In another terminal:
+OSC — in another terminal:
 
 ```bash
 python tools/osc_listen.py --port 9000
@@ -66,9 +113,16 @@ python tools/osc_listen.py --port 9000
 
 Then run `python stickosc.py --demo` and watch addresses print.
 
+MIDI — start StickOSC with `--midi` first, then:
+
+```bash
+python tools/midi_listen.py --port StickOSC
+```
+
 ## Notes
 
 - Stick deadzone default: `0.12` (in `mapping.yaml`)
 - Sends **only on change** (not a flood every frame)
-- `Ctrl+C` to quit cleanly
+- MIDI uses **mido** + **python-rtmidi** (virtual port on most OSes)
+- `Ctrl+C` to quit cleanly (also sends MIDI All Notes Off)
 - Set `NO_COLOR=1` to disable ANSI colours
