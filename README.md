@@ -27,15 +27,16 @@ Controls: Start/Stop, OSC host/port, MIDI on/off, layout (`auto`/`xbox`/`ps5`), 
 Build on the target OS (PyInstaller cannot cross-compile):
 
 ```bash
-# macOS
+# macOS → dist/StickOSC.app
 chmod +x tools/build_mac.sh
 ./tools/build_mac.sh
-# → dist/StickOSC.app or dist/StickOSC
+open dist/StickOSC.app
 
-# Windows (cmd)
+# Windows (cmd) → dist\StickOSC.exe
 tools\build_win.bat
-# → dist\StickOSC.exe
 ```
+
+The Mac script creates a local `.venv`, installs deps, and builds `dist/StickOSC.app` via `stickosc.macos.spec`.
 
 Frozen apps store user config at `~/.stickosc/mapping.yaml` (copied from the bundled default on first run).
 
