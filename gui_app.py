@@ -16,37 +16,64 @@ from stickosc import (
 )
 
 
-class MeterBar(tk.Canvas):
-    """Simple horizontal meter; bipolar if center=True."""
+class MeterBar(ttk.Frame):
+    """Simple horizontal meter; bipolar if center=True.
 
-    def __init__(self, master: tk.Misc, *, width: int = 180, height: int = 14, center: bool = False) -> None:
-        super().__init__(master, width=width, height=height, highlightthickness=0, bg="#1e1e1e")
-        self._w = width
-        self._h = height
-        self._center = center
+    Uses composition (not Canvas subclass) — Canvas subclass + delete()
+    during __init__ crashes on some Windows/PyInstaller tk builds
+    with: TclError: invalid command name \"180\".
+    """
+
+    def __init__(
+        self,
+        master: tk.Misc,
+        *,
+        width: int = 180,
+        height: int = 14,
+        center: bool = False,
+    ) -> None:
+        super().__init__(master)
+        self._w = int(width)
+        self._h = int(height)
+        self._center = bool(center)
         self._value = 0.0
-        self.redraw()
+        self._canvas = tk.Canvas(
+            self,
+            width=self._w,
+            height=self._h,
+            highlightthickness=0,
+            bg="#1e1e1e",
+            borderwidth=0,
+        )
+        self._canvas.pack()
+        # Defer first paint until widget exists in Tcl (Windows-safe)
+        self.after_idle(self.redraw)
 
     def set_value(self, value: float) -> None:
         self._value = max(-1.0, min(1.0, float(value)))
         self.redraw()
 
     def redraw(self) -> None:
-        self.delete("all")
-        self.create_rectangle(0, 0, self._w, self._h, fill="#2a2a2a", outline="")
+        c = self._canvas
+        try:
+            if not c.winfo_exists():
+                return
+            c.delete("all")
+        except tk.TclError:
+            return
+        c.create_rectangle(0, 0, self._w, self._h, fill="#2a2a2a", outline="")
         if self._center:
             mid = self._w // 2
-            self.create_line(mid, 0, mid, self._h, fill="#666666")
+            c.create_line(mid, 0, mid, self._h, fill="#666666")
             fill_w = int(abs(self._value) * (self._w / 2))
             if self._value >= 0:
-                self.create_rectangle(mid, 1, mid + fill_w, self._h - 1, fill="#3db8a8", outline="")
+                c.create_rectangle(mid, 1, mid + fill_w, self._h - 1, fill="#3db8a8", outline="")
             else:
-                self.create_rectangle(mid - fill_w, 1, mid, self._h - 1, fill="#3db8a8", outline="")
+                c.create_rectangle(mid - fill_w, 1, mid, self._h - 1, fill="#3db8a8", outline="")
         else:
-            # trigger 0..1
             v = max(0.0, self._value)
             fill_w = int(v * self._w)
-            self.create_rectangle(0, 1, fill_w, self._h - 1, fill="#3db8a8", outline="")
+            c.create_rectangle(0, 1, fill_w, self._h - 1, fill="#3db8a8", outline="")
 
 
 class StickOscApp(ttk.Frame):
@@ -67,7 +94,7 @@ class StickOscApp(ttk.Frame):
         self.master.minsize(520, 420)
         self.pack(fill="both", expand=True)
 
-        title = ttk.Label(self, text="StickOSC", font=("Helvetica", 18, "bold"))
+        title = ttk.Label(self, text="StickOSC", font=("Segoe UI", 18, "bold"))
         title.grid(row=0, column=0, columnspan=2, sticky="w")
         ttk.Label(self, text="Xbox / PS5 → OSC / MIDI").grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 8))
 
