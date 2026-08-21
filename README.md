@@ -12,7 +12,34 @@ pip install -r requirements.txt
 python stickosc.py
 ```
 
-Plug in an Xbox or PS5 pad first. You should see a live status board:
+### GUI
+
+```bash
+python stickosc.py --gui
+# or
+python gui_app.py
+```
+
+Controls: Start/Stop, OSC host/port, MIDI on/off, layout (`auto`/`xbox`/`ps5`), pad index, demo mode, live stick meters. **Save** writes settings into `mapping.yaml`.
+
+### Standalone app (Mac / Windows)
+
+Build on the target OS (PyInstaller cannot cross-compile):
+
+```bash
+# macOS
+chmod +x tools/build_mac.sh
+./tools/build_mac.sh
+# → dist/StickOSC.app or dist/StickOSC
+
+# Windows (cmd)
+tools\build_win.bat
+# → dist\StickOSC.exe
+```
+
+Frozen apps store user config at `~/.stickosc/mapping.yaml` (copied from the bundled default on first run).
+
+Plug in an Xbox or PS5 pad first. CLI mode shows a live status board:
 
 ```
 StickOSC  ·  Pad → OSC / MIDI
@@ -103,6 +130,7 @@ Simulates stick / trigger motion so you can verify OSC / MIDI without hardware.
 
 | Flag | Meaning |
 |------|---------|
+| `--gui` | open the control window |
 | `--host 192.168.1.10` | OSC destination IP |
 | `--port 8000` | OSC destination port |
 | `--config path.yaml` | custom mapping file |
@@ -154,3 +182,4 @@ python tools/midi_listen.py --port StickOSC
 - PS5 touchpad / gyro / adaptive triggers are not mapped yet
 - `Ctrl+C` to quit cleanly (also sends MIDI All Notes Off)
 - Set `NO_COLOR=1` to disable ANSI colours
+- Dev packaging dependency: `pip install -r requirements-dev.txt` (PyInstaller)

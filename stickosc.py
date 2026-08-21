@@ -5,8 +5,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
+import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -679,6 +682,292 @@ def demo_values(t: float) -> dict[str, float]:
 
 
 # ---------------------------------------------------------------------------
+# Engine (shared by CLI + GUI)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class EngineSettings:
+    config_path: Path
+    host: str = "127.0.0.1"
+    port: int = 9000
+    index: int = 0
+    deadzone: float = 0.12
+    layout_pref: str = "auto"
+    osc_enabled: bool = True
+    midi_enabled: bool = False
+    midi_port: str = "StickOSC"
+    midi_channel: int = 1
+    demo: bool = False
+    verbose: bool = False
+
+
+@dataclass
+class EngineSnapshot:
+    running: bool
+    joy_name: str | None
+    layout: str
+    layout_pref: str
+    values: dict[str, float]
+    osc_line: str
+    midi_line: str
+    sent_pulse: bool
+    error: str | None
+    deadzone: float
+    config_name: str
+
+
+def default_config_path() -> Path:
+    """CLI uses repo mapping.yaml; frozen apps use ~/.stickosc/mapping.yaml."""
+    if getattr(sys, "frozen", False):
+        user_dir = Path.home() / ".stickosc"
+        user_dir.mkdir(parents=True, exist_ok=True)
+        dest = user_dir / "mapping.yaml"
+        if not dest.exists():
+            meipass = getattr(sys, "_MEIPASS", None)
+            bundled = Path(meipass) / "mapping.yaml" if meipass else None
+            if bundled is not None and bundled.exists():
+                shutil.copy2(bundled, dest)
+            else:
+                dest.write_text(DEFAULT_YAML, encoding="utf-8")
+        return dest
+    return DEFAULT_CONFIG
+
+
+def save_config_settings(path: Path, settings: EngineSettings, base: dict[str, Any] | None = None) -> None:
+    """Persist OSC / MIDI / controller fields into mapping.yaml (keep map: intact)."""
+    data = base if base is not None else load_config(path)
+    data.setdefault("osc", {})
+    data.setdefault("midi", {})
+    data.setdefault("controller", {})
+    data["osc"]["enabled"] = bool(settings.osc_enabled)
+    data["osc"]["host"] = settings.host
+    data["osc"]["port"] = int(settings.port)
+    data["midi"]["enabled"] = bool(settings.midi_enabled)
+    data["midi"]["port"] = settings.midi_port
+    data["midi"]["channel"] = int(settings.midi_channel)
+    data["controller"]["index"] = int(settings.index)
+    data["controller"]["deadzone"] = float(settings.deadzone)
+    data["controller"]["layout"] = settings.layout_pref
+    with path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
+
+
+class StickEngine:
+    """Poll controller and send OSC/MIDI; usable from CLI or a GUI thread."""
+
+    def __init__(self, settings: EngineSettings) -> None:
+        self.settings = settings
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._snapshot = EngineSnapshot(
+            running=False,
+            joy_name=None,
+            layout="xbox",
+            layout_pref=settings.layout_pref,
+            values={},
+            osc_line="off",
+            midi_line="off",
+            sent_pulse=False,
+            error=None,
+            deadzone=settings.deadzone,
+            config_name=settings.config_path.name,
+        )
+        self._pygame_ready = False
+
+    def get_snapshot(self) -> EngineSnapshot:
+        with self._lock:
+            snap = self._snapshot
+            return EngineSnapshot(
+                running=snap.running,
+                joy_name=snap.joy_name,
+                layout=snap.layout,
+                layout_pref=snap.layout_pref,
+                values=dict(snap.values),
+                osc_line=snap.osc_line,
+                midi_line=snap.midi_line,
+                sent_pulse=snap.sent_pulse,
+                error=snap.error,
+                deadzone=snap.deadzone,
+                config_name=snap.config_name,
+            )
+
+    def _publish(self, **kwargs: Any) -> None:
+        with self._lock:
+            for key, value in kwargs.items():
+                setattr(self._snapshot, key, value)
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, name="StickEngine", daemon=True)
+        self._thread.start()
+
+    def stop(self, timeout: float = 2.0) -> None:
+        self._stop.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=timeout)
+        self._thread = None
+        self._publish(running=False, sent_pulse=False)
+
+    def run_blocking(self, on_frame: Any | None = None) -> int:
+        """Run on the current thread until stop/KeyboardInterrupt. CLI uses this."""
+        self._stop.clear()
+        try:
+            return self._run(on_frame=on_frame)
+        except KeyboardInterrupt:
+            return 0
+        finally:
+            self._publish(running=False)
+
+    def _init_pygame(self) -> None:
+        os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+        pygame.init()
+        pygame.joystick.init()
+        self._pygame_ready = True
+
+    def _run(self, on_frame: Any | None = None) -> int:
+        settings = self.settings
+        cfg = load_config(settings.config_path)
+        mapping = cfg["map"]
+        deadzone = float(settings.deadzone)
+        layout_pref = settings.layout_pref if settings.layout_pref in VALID_LAYOUTS else "auto"
+
+        if not settings.osc_enabled and not settings.midi_enabled:
+            self._publish(running=False, error="enable OSC and/or MIDI")
+            return 2
+
+        osc: OscBridge | None = None
+        midi: MidiBridge | None = None
+        error: str | None = None
+
+        if settings.osc_enabled:
+            osc = OscBridge(settings.host, int(settings.port), mapping)
+
+        if settings.midi_enabled:
+            try:
+                midi = MidiBridge(settings.midi_port, int(settings.midi_channel), mapping)
+            except Exception as exc:
+                error = f"MIDI open failed: {exc}"
+                if not settings.osc_enabled:
+                    self._publish(running=False, error=error)
+                    return 1
+                midi = None
+
+        self._init_pygame()
+        joy = None if settings.demo else open_joystick(settings.index)
+        joy_name = "Demo Pad" if settings.demo else (joy.get_name() if joy else None)
+        if settings.demo:
+            active_layout = layout_pref if layout_pref in ("xbox", "ps5") else "xbox"
+        else:
+            active_layout = resolve_layout(layout_pref, joy_name)
+
+        values = {k: 0.0 for k in mapping}
+        t0 = time.monotonic()
+        last_frame = 0.0
+
+        def osc_line() -> str:
+            return "off" if osc is None else osc.label
+
+        def midi_line() -> str:
+            if midi is None:
+                return "off"
+            return f"ch{settings.midi_channel} → {midi.label}"
+
+        self._publish(
+            running=True,
+            joy_name=joy_name,
+            layout=active_layout,
+            layout_pref=layout_pref,
+            values=dict(values),
+            osc_line=osc_line(),
+            midi_line=midi_line(),
+            sent_pulse=False,
+            error=error,
+            deadzone=deadzone,
+            config_name=settings.config_path.name,
+        )
+
+        try:
+            while not self._stop.is_set():
+                now = time.monotonic()
+                pygame.event.pump()
+
+                if settings.demo:
+                    values = demo_values(now - t0)
+                    joy_name = "Demo Pad"
+                    active_layout = layout_pref if layout_pref in ("xbox", "ps5") else "xbox"
+                else:
+                    if joy is None:
+                        joy = open_joystick(settings.index)
+                        joy_name = joy.get_name() if joy else None
+                        active_layout = resolve_layout(layout_pref, joy_name)
+                    else:
+                        try:
+                            joy_name = joy.get_name()
+                            active_layout = resolve_layout(layout_pref, joy_name)
+                            values = read_controls(joy, deadzone, active_layout)
+                        except pygame.error:
+                            joy = None
+                            joy_name = None
+                            active_layout = resolve_layout(layout_pref, None)
+                            values = {k: 0.0 for k in mapping}
+
+                sent = False
+                if osc is not None:
+                    sent = osc.send_changed(values) or sent
+                if midi is not None:
+                    sent = midi.send_changed(values) or sent
+
+                if settings.verbose and sent:
+                    for k, v in values.items():
+                        if mapping.get(k, {}).get("type") == "button" and v >= 0.5:
+                            addr = mapping[k].get("address", "?")
+                            print(f"[btn] {k}=1 → {addr}", file=sys.stderr)
+
+                pulse = sent
+                if osc is not None and osc.sent_recently:
+                    pulse = True
+                if midi is not None and midi.sent_recently:
+                    pulse = True
+
+                if now - last_frame >= 1.0 / REDRAW_HZ:
+                    self._publish(
+                        running=True,
+                        joy_name=joy_name,
+                        layout=active_layout,
+                        layout_pref=layout_pref,
+                        values=dict(values),
+                        osc_line=osc_line(),
+                        midi_line=midi_line(),
+                        sent_pulse=pulse,
+                        error=error,
+                        deadzone=deadzone,
+                        config_name=settings.config_path.name,
+                    )
+                    if on_frame is not None:
+                        on_frame(self.get_snapshot())
+                    last_frame = now
+                    if not sent:
+                        if osc is not None:
+                            osc.sent_recently = False
+                        if midi is not None:
+                            midi.sent_recently = False
+
+                time.sleep(1.0 / POLL_HZ)
+            return 0
+        finally:
+            if midi is not None:
+                midi.close()
+            if self._pygame_ready:
+                pygame.quit()
+                self._pygame_ready = False
+            self._publish(running=False, sent_pulse=False)
+
+
+# ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
 
@@ -688,7 +977,7 @@ def parse_args() -> argparse.Namespace:
         prog="stickosc",
         description="StickOSC maps Xbox / PS5 pads to OSC and/or MIDI (remap in YAML).",
     )
-    p.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="path to mapping.yaml")
+    p.add_argument("--config", type=Path, default=None, help="path to mapping.yaml")
     p.add_argument("--host", default=None, help="OSC host (overrides config)")
     p.add_argument("--port", type=int, default=None, help="OSC port (overrides config)")
     p.add_argument("--index", type=int, default=None, help="controller index (overrides config)")
@@ -707,11 +996,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--midi-port", default=None, help="MIDI output port name (or virtual name)")
     p.add_argument("--midi-channel", type=int, default=None, help="MIDI channel 1-16")
     p.add_argument("--list-midi-ports", action="store_true", help="list MIDI output ports and exit")
+    p.add_argument("--gui", action="store_true", help="open the StickOSC control window")
     return p.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+
+    if args.gui:
+        from gui_app import run as run_gui
+
+        return run_gui(config_path=args.config)
 
     if args.list_midi_ports:
         try:
@@ -727,7 +1022,8 @@ def main() -> int:
                 print(f"  · {name}")
         return 0
 
-    cfg = load_config(args.config)
+    config_path = args.config or default_config_path()
+    cfg = load_config(config_path)
 
     osc_enabled = bool(cfg["osc"].get("enabled", True)) and not args.no_osc
     midi_enabled = bool(cfg["midi"].get("enabled", False))
@@ -736,81 +1032,45 @@ def main() -> int:
     if args.no_midi:
         midi_enabled = False
 
-    host = args.host or cfg["osc"]["host"]
-    port = int(args.port if args.port is not None else cfg["osc"]["port"])
-    index = int(args.index if args.index is not None else cfg["controller"]["index"])
-    deadzone = float(cfg["controller"]["deadzone"])
     layout_pref = (args.layout or str(cfg["controller"].get("layout", "auto"))).lower()
     if layout_pref not in VALID_LAYOUTS:
         print(f"unknown layout {layout_pref!r}; using auto", file=sys.stderr)
         layout_pref = "auto"
-    mapping = cfg["map"]
-    midi_port_name = args.midi_port or str(cfg["midi"].get("port", "StickOSC"))
-    midi_channel = int(
-        args.midi_channel if args.midi_channel is not None else cfg["midi"].get("channel", 1)
+
+    settings = EngineSettings(
+        config_path=config_path,
+        host=args.host or cfg["osc"]["host"],
+        port=int(args.port if args.port is not None else cfg["osc"]["port"]),
+        index=int(args.index if args.index is not None else cfg["controller"]["index"]),
+        deadzone=float(cfg["controller"]["deadzone"]),
+        layout_pref=layout_pref,
+        osc_enabled=osc_enabled,
+        midi_enabled=midi_enabled,
+        midi_port=args.midi_port or str(cfg["midi"].get("port", "StickOSC")),
+        midi_channel=int(
+            args.midi_channel if args.midi_channel is not None else cfg["midi"].get("channel", 1)
+        ),
+        demo=bool(args.demo),
+        verbose=bool(args.verbose),
     )
 
-    if not osc_enabled and not midi_enabled:
+    if not settings.osc_enabled and not settings.midi_enabled:
         print("nothing to send: enable OSC and/or MIDI", file=sys.stderr)
         return 2
 
     ansi = Ansi(use_color() and not args.static)
-    osc: OscBridge | None = None
-    midi: MidiBridge | None = None
-
-    if osc_enabled:
-        osc = OscBridge(host, port, mapping)
-
-    if midi_enabled:
-        try:
-            midi = MidiBridge(midi_port_name, midi_channel, mapping)
-        except Exception as exc:
-            print(f"MIDI open failed: {exc}", file=sys.stderr)
-            if not osc_enabled:
-                return 1
-            print("continuing with OSC only…", file=sys.stderr)
-            midi = None
-            midi_enabled = False
-
-    # Headless-friendly pygame init (no window)
-    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
-    pygame.init()
-    pygame.joystick.init()
-
-    joy = None if args.demo else open_joystick(index)
-    joy_name = "Demo Pad" if args.demo else (joy.get_name() if joy else None)
-    if args.demo:
-        active_layout = layout_pref if layout_pref in ("xbox", "ps5") else "xbox"
-    else:
-        active_layout = resolve_layout(layout_pref, joy_name)
-
-    values = {k: 0.0 for k in mapping}
-    last_redraw = 0.0
-    last_lines = 0
-    t0 = time.monotonic()
     interactive = sys.stdout.isatty()
-
-    def osc_line() -> str:
-        if osc is None:
-            return ansi.dim("off")
-        return f"{osc.label}"
-
-    def midi_line() -> str:
-        if midi is None:
-            return ansi.dim("off")
-        return f"ch{midi_channel} → {midi.label}"
+    last_lines = 0
 
     def clear_and_print(text: str) -> None:
         nonlocal last_lines
         if not interactive:
-            # Avoid flooding pipes/logs: print status once, then stay quiet.
             if last_lines == 0:
                 print(text)
                 last_lines = text.count("\n") + 1
                 sys.stdout.flush()
             return
         if last_lines > 0:
-            # move cursor up and clear
             sys.stdout.write(f"\033[{last_lines}A")
             for _ in range(last_lines):
                 sys.stdout.write("\033[2K\n")
@@ -819,105 +1079,37 @@ def main() -> int:
         last_lines = text.count("\n") + 1
         sys.stdout.flush()
 
-    try:
-        # first paint
+    def on_frame(snap: EngineSnapshot) -> None:
         frame = render_status(
             ansi,
-            joy_name=joy_name,
-            layout=active_layout,
-            layout_source=layout_pref,
-            osc_line=osc_line(),
-            midi_line=midi_line(),
-            config_name=args.config.name,
-            values=values,
-            deadzone=deadzone,
-            sent_pulse=False,
+            joy_name=snap.joy_name,
+            layout=snap.layout,
+            layout_source=snap.layout_pref,
+            osc_line=ansi.dim(snap.osc_line) if snap.osc_line == "off" else snap.osc_line,
+            midi_line=ansi.dim(snap.midi_line) if snap.midi_line == "off" else snap.midi_line,
+            config_name=snap.config_name,
+            values=snap.values,
+            deadzone=snap.deadzone,
+            sent_pulse=snap.sent_pulse,
             static=args.static,
         )
         clear_and_print(frame)
 
-        while True:
-            now = time.monotonic()
-            pygame.event.pump()
-
-            if args.demo:
-                values = demo_values(now - t0)
-                joy_name = "Demo Pad"
-                if layout_pref in ("xbox", "ps5"):
-                    active_layout = layout_pref
-                else:
-                    active_layout = "xbox"
-            else:
-                # reconnect if unplugged
-                if joy is None:
-                    joy = open_joystick(index)
-                    joy_name = joy.get_name() if joy else None
-                    active_layout = resolve_layout(layout_pref, joy_name)
-                else:
-                    try:
-                        # get_name raises if disconnected on some platforms
-                        joy_name = joy.get_name()
-                        active_layout = resolve_layout(layout_pref, joy_name)
-                        values = read_controls(joy, deadzone, active_layout)
-                    except pygame.error:
-                        joy = None
-                        joy_name = None
-                        active_layout = resolve_layout(layout_pref, None)
-                        values = {k: 0.0 for k in mapping}
-
-            sent = False
-            if osc is not None:
-                sent = osc.send_changed(values) or sent
-            if midi is not None:
-                sent = midi.send_changed(values) or sent
-
-            if args.verbose and sent:
-                for k, v in values.items():
-                    if mapping.get(k, {}).get("type") == "button" and v >= 0.5:
-                        addr = mapping[k].get("address", "?")
-                        midi_meta = mapping[k].get("midi") or {}
-                        extra = ""
-                        if midi is not None and midi_meta.get("kind") == "note":
-                            extra = f"  midi note {midi_meta.get('note')}"
-                        print(f"[btn] {k}=1 → {addr}{extra}", file=sys.stderr)
-
-            if now - last_redraw >= 1.0 / REDRAW_HZ:
-                pulse = sent
-                if osc is not None and osc.sent_recently:
-                    pulse = True
-                if midi is not None and midi.sent_recently:
-                    pulse = True
-                frame = render_status(
-                    ansi,
-                    joy_name=joy_name,
-                    layout=active_layout,
-                    layout_source=layout_pref,
-                    osc_line=osc_line(),
-                    midi_line=midi_line(),
-                    config_name=args.config.name,
-                    values=values,
-                    deadzone=deadzone,
-                    sent_pulse=pulse,
-                    static=args.static,
-                )
-                clear_and_print(frame)
-                last_redraw = now
-                if not sent:
-                    if osc is not None:
-                        osc.sent_recently = False
-                    if midi is not None:
-                        midi.sent_recently = False
-
-            time.sleep(1.0 / POLL_HZ)
+    engine = StickEngine(settings)
+    try:
+        code = engine.run_blocking(on_frame=on_frame)
+        if interactive:
+            print()
+        if code == 0:
+            print(ansi.dim("StickOSC stopped."))
+        elif engine.get_snapshot().error:
+            print(engine.get_snapshot().error, file=sys.stderr)
+        return code
     except KeyboardInterrupt:
         if interactive:
             print()
         print(ansi.dim("StickOSC stopped."))
         return 0
-    finally:
-        if midi is not None:
-            midi.close()
-        pygame.quit()
 
 
 if __name__ == "__main__":
