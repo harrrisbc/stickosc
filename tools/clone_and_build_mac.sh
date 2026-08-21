@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Clone StickOSC from GitHub and build StickOSC.app on macOS.
 #
-# One-shot (recommended):
+# One-shot:
 #   curl -fsSL https://raw.githubusercontent.com/harrrisbc/stickosc/cursor/gui-standalone-app-5a6a/tools/clone_and_build_mac.sh | bash
 #
-# Or download / run from an existing checkout:
-#   chmod +x tools/clone_and_build_mac.sh
-#   ./tools/clone_and_build_mac.sh
+# Needs Python 3.9–3.13 (NOT 3.14). Recommended:
+#   brew install python@3.12
 #
 # Env overrides:
 #   REPO_URL   default: https://github.com/harrrisbc/stickosc.git
-#   BRANCH     default: cursor/gui-standalone-app-5a6a  (GUI + Mac app branch)
+#   BRANCH     default: cursor/gui-standalone-app-5a6a
 #   DEST       default: ~/stickosc
+#   PYTHON     e.g. python3.12
 
 set -euo pipefail
 
@@ -26,12 +26,6 @@ if ! command -v git >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "error: python3 not found. Install Python 3 from https://www.python.org/downloads/ or:" >&2
-  echo "  brew install python" >&2
-  exit 1
-fi
-
 REPO_URL="${REPO_URL:-https://github.com/harrrisbc/stickosc.git}"
 BRANCH="${BRANCH:-cursor/gui-standalone-app-5a6a}"
 DEST="${DEST:-$HOME/stickosc}"
@@ -40,6 +34,25 @@ echo "==> StickOSC clone + Mac build"
 echo "    repo:   $REPO_URL"
 echo "    branch: $BRANCH"
 echo "    dest:   $DEST"
+
+# Soft preflight: warn early about Python 3.14
+if command -v python3 >/dev/null 2>&1; then
+  PYVER="$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>/dev/null || true)"
+  if [[ "$PYVER" == "3.14" || "$PYVER" == "3.15" ]]; then
+    echo
+    echo "warning: default python3 is $PYVER — pygame will fail to install."
+    echo "Install 3.12 first, then re-run:"
+    echo "  brew install python@3.12"
+    echo "  PYTHON=python3.12 DEST=\"$DEST\" bash $0"
+    echo
+    if ! command -v python3.12 >/dev/null 2>&1 && ! command -v python3.11 >/dev/null 2>&1; then
+      echo "error: no Python 3.11/3.12 found on PATH." >&2
+      exit 1
+    fi
+    export PYTHON="${PYTHON:-$(command -v python3.12 || command -v python3.11)}"
+    echo "    will use: $PYTHON"
+  fi
+fi
 
 if [[ -d "$DEST/.git" ]]; then
   echo "==> Repo exists — fetching / updating"
@@ -56,6 +69,15 @@ else
 fi
 
 cd "$DEST"
+
+# Drop broken 3.14 venv from previous attempt
+if [[ -d .venv ]]; then
+  if ! .venv/bin/python -c 'import sys; raise SystemExit(0 if (3,9) <= sys.version_info[:2] <= (3,13) else 1)' 2>/dev/null; then
+    echo "==> Removing old incompatible .venv"
+    rm -rf .venv
+  fi
+fi
+
 chmod +x tools/build_mac.sh
 ./tools/build_mac.sh
 

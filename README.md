@@ -27,7 +27,21 @@ Controls: Start/Stop, OSC host/port, MIDI on/off, layout (`auto`/`xbox`/`ps5`), 
 **Mac — clone from GitHub + build (one shot):**
 
 ```bash
+# pygame needs Python 3.9–3.13 (3.14 will fail). Recommended:
+brew install python@3.12
+
 curl -fsSL https://raw.githubusercontent.com/harrrisbc/stickosc/cursor/gui-standalone-app-5a6a/tools/clone_and_build_mac.sh | bash
+```
+
+If you already tried with Python 3.14 and it failed:
+
+```bash
+brew install python@3.12
+rm -rf ~/stickosc/.venv
+PYTHON=python3.12 ~/stickosc/tools/build_mac.sh
+# or re-run:
+PYTHON=python3.12 bash ~/stickosc/tools/clone_and_build_mac.sh
+open ~/stickosc/dist/StickOSC.app
 ```
 
 This clones into `~/stickosc`, installs deps in a venv, and builds `~/stickosc/dist/StickOSC.app`.
