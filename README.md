@@ -60,11 +60,35 @@ chmod +x tools/clone_and_build_mac.sh
 # optional: BRANCH=main DEST=~/src/stickosc ./tools/clone_and_build_mac.sh
 ```
 
-**Windows (cmd) → `dist\StickOSC.exe`:**
+**Windows — clone from GitHub + build (PowerShell):**
+
+```powershell
+# pygame needs Python 3.9–3.13 (not 3.14)
+winget install Git.Git
+winget install Python.Python.3.12
+
+irm https://raw.githubusercontent.com/harrrisbc/stickosc/cursor/gui-standalone-app-5a6a/tools/clone_and_build_win.ps1 | iex
+```
+
+Or from **cmd** after you already have the repo:
 
 ```bat
+cd %USERPROFILE%\stickosc
+tools\clone_and_build_win.bat
+start "" dist\StickOSC.exe
+```
+
+If a previous Python 3.14 attempt failed:
+
+```bat
+winget install Python.Python.3.12
+rmdir /s /q %USERPROFILE%\stickosc\.venv
+cd %USERPROFILE%\stickosc
+git pull
 tools\build_win.bat
 ```
+
+Output: `%USERPROFILE%\stickosc\dist\StickOSC.exe`
 
 The Mac build uses `stickosc.macos.spec`. Frozen apps store user config at `~/.stickosc/mapping.yaml` (copied from the bundled default on first run).
 
