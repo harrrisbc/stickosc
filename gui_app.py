@@ -91,7 +91,7 @@ class StickOscApp(ttk.Frame):
 
     def _build(self) -> None:
         self.master.title("StickOSC")
-        self.master.minsize(520, 420)
+        self.master.minsize(520, 500)
         self.pack(fill="both", expand=True)
 
         title = ttk.Label(self, text="StickOSC", font=("Segoe UI", 18, "bold"))
@@ -117,6 +117,20 @@ class StickOscApp(ttk.Frame):
         ttk.Label(left, text="Port").grid(row=row, column=0, sticky="w")
         self.port_var = tk.StringVar()
         ttk.Entry(left, textvariable=self.port_var, width=8).grid(row=row, column=1, sticky="w", pady=2)
+        row += 1
+
+        self.osc2_enabled = tk.BooleanVar(value=False)
+        ttk.Checkbutton(left, text="OSC extra", variable=self.osc2_enabled).grid(
+            row=row, column=0, sticky="w", pady=(6, 0)
+        )
+        row += 1
+        ttk.Label(left, text="Extra host").grid(row=row, column=0, sticky="w")
+        self.osc2_host_var = tk.StringVar()
+        ttk.Entry(left, textvariable=self.osc2_host_var, width=18).grid(row=row, column=1, sticky="we", pady=2)
+        row += 1
+        ttk.Label(left, text="Extra port").grid(row=row, column=0, sticky="w")
+        self.osc2_port_var = tk.StringVar()
+        ttk.Entry(left, textvariable=self.osc2_port_var, width=8).grid(row=row, column=1, sticky="w", pady=2)
         row += 1
 
         self.midi_enabled = tk.BooleanVar(value=False)
@@ -221,6 +235,10 @@ class StickOscApp(ttk.Frame):
         self.osc_enabled.set(bool(c["osc"].get("enabled", True)))
         self.host_var.set(str(c["osc"].get("host", "127.0.0.1")))
         self.port_var.set(str(c["osc"].get("port", 9000)))
+        extra = c["osc"].get("extra") or {}
+        self.osc2_enabled.set(bool(extra.get("enabled", False)))
+        self.osc2_host_var.set(str(extra.get("host", "127.0.0.1")))
+        self.osc2_port_var.set(str(extra.get("port", 9001)))
         self.midi_enabled.set(bool(c["midi"].get("enabled", False)))
         self.midi_port_var.set(str(c["midi"].get("port", "StickOSC")))
         self.midi_ch_var.set(str(c["midi"].get("channel", 1)))
@@ -230,6 +248,7 @@ class StickOscApp(ttk.Frame):
     def _settings_from_fields(self) -> EngineSettings:
         try:
             port = int(self.port_var.get().strip())
+            osc2_port = int(self.osc2_port_var.get().strip() or "9001")
             index = int(self.index_var.get().strip())
             channel = int(self.midi_ch_var.get().strip())
         except ValueError as exc:
@@ -242,6 +261,9 @@ class StickOscApp(ttk.Frame):
             deadzone=float(self.cfg["controller"].get("deadzone", 0.12)),
             layout_pref=self.layout_var.get() or "auto",
             osc_enabled=bool(self.osc_enabled.get()),
+            osc2_enabled=bool(self.osc2_enabled.get()),
+            osc2_host=self.osc2_host_var.get().strip() or "127.0.0.1",
+            osc2_port=osc2_port,
             midi_enabled=bool(self.midi_enabled.get()),
             midi_port=self.midi_port_var.get().strip() or "StickOSC",
             midi_channel=channel,
@@ -257,7 +279,7 @@ class StickOscApp(ttk.Frame):
         except ValueError as exc:
             messagebox.showerror("StickOSC", str(exc))
             return
-        if not settings.osc_enabled and not settings.midi_enabled:
+        if not settings.any_output:
             messagebox.showerror("StickOSC", "Enable OSC and/or MIDI first.")
             return
         # persist current control fields

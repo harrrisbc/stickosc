@@ -20,7 +20,7 @@ python stickosc.py --gui
 python gui_app.py
 ```
 
-Controls: Start/Stop, OSC host/port, MIDI on/off, layout (`auto`/`xbox`/`ps5`), pad index, demo mode, live stick meters. **Save** writes settings into `mapping.yaml`.
+Controls: Start/Stop, OSC host/port, **OSC extra** (second destination), MIDI on/off, layout (`auto`/`xbox`/`ps5`), pad index, demo mode, live stick meters. **Save** writes settings into `mapping.yaml`.
 
 ### Standalone app (Mac / Windows)
 
@@ -106,6 +106,28 @@ MIDI        off
 
 Default OSC target: **`127.0.0.1:9000`**
 
+Optional second target (same addresses, another IP/port):
+
+```bash
+python stickosc.py --osc2 --osc2-host 192.168.1.20 --osc2-port 8000
+```
+
+Or in `mapping.yaml`:
+
+```yaml
+osc:
+  enabled: true
+  host: 127.0.0.1
+  port: 9000
+  extra:
+    enabled: true
+    host: 192.168.1.20
+    port: 8000
+```
+
+In the GUI, tick **OSC extra** and fill Extra host / Extra port. Extra dest can run even if the primary OSC checkbox is off.
+
+
 ## Controllers (Xbox + PS5)
 
 StickOSC auto-detects the pad from its name and picks a button/axis **layout**.
@@ -186,6 +208,10 @@ Simulates stick / trigger motion so you can verify OSC / MIDI without hardware.
 | `--gui` | open the control window |
 | `--host 192.168.1.10` | OSC destination IP |
 | `--port 8000` | OSC destination port |
+| `--osc2` | enable extra OSC destination |
+| `--osc2-host IP` | extra OSC host |
+| `--osc2-port N` | extra OSC port |
+| `--no-osc2` | disable extra OSC |
 | `--config path.yaml` | custom mapping file |
 | `--index 0` | which pad (if several) |
 | `--layout auto\|xbox\|ps5` | controller button/axis layout |
