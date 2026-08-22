@@ -1,29 +1,36 @@
-# StickOSC config — remap by changing `address` only
+# StickOSC config — remap OSC `address` and optional `midi` per control
 osc:
+  enabled: true
   host: 127.0.0.1
   port: 9000
   prefix: /xbox
 
+midi:
+  enabled: false
+  port: StickOSC
+  channel: 1
+
 controller:
   index: 0
   deadzone: 0.12
+  layout: auto
 
 map:
-  a:       { address: /xbox/btn/a,        type: button }
-  b:       { address: /xbox/btn/b,        type: button }
-  x:       { address: /xbox/btn/x,        type: button }
-  y:       { address: /xbox/btn/y,        type: button }
-  lb:      { address: /xbox/btn/lb,       type: button }
-  rb:      { address: /xbox/btn/rb,       type: button }
-  back:    { address: /xbox/btn/back,     type: button }
-  start:   { address: /xbox/btn/start,    type: button }
-  l3:      { address: /xbox/btn/l3,       type: button }
-  r3:      { address: /xbox/btn/r3,       type: button }
-  dpad_x:  { address: /xbox/dpad/x,       type: hat_x }
-  dpad_y:  { address: /xbox/dpad/y,       type: hat_y }
-  left_x:  { address: /xbox/stick/left/x, type: axis }
-  left_y:  { address: /xbox/stick/left/y, type: axis }
-  right_x: { address: /xbox/stick/right/x, type: axis }
-  right_y: { address: /xbox/stick/right/y, type: axis }
-  lt:      { address: /xbox/trigger/left, type: trigger }
-  rt:      { address: /xbox/trigger/right, type: trigger }
+  a:       { address: /xbox/btn/a,         type: button,  midi: { kind: note, note: 60 } }
+  b:       { address: /xbox/btn/b,         type: button,  midi: { kind: note, note: 62 } }
+  x:       { address: /xbox/btn/x,         type: button,  midi: { kind: note, note: 64 } }
+  y:       { address: /xbox/btn/y,         type: button,  midi: { kind: note, note: 65 } }
+  lb:      { address: /xbox/btn/lb,        type: button,  midi: { kind: note, note: 67 } }
+  rb:      { address: /xbox/btn/rb,        type: button,  midi: { kind: note, note: 69 } }
+  back:    { address: /xbox/btn/back,      type: button,  midi: { kind: note, note: 71 } }
+  start:   { address: /xbox/btn/start,     type: button,  midi: { kind: note, note: 72 } }
+  l3:      { address: /xbox/btn/l3,        type: button,  midi: { kind: note, note: 74 } }
+  r3:      { address: /xbox/btn/r3,        type: button,  midi: { kind: note, note: 76 } }
+  dpad_x:  { address: /xbox/dpad/x,        type: hat_x,   midi: { kind: cc, cc: 20 } }
+  dpad_y:  { address: /xbox/dpad/y,        type: hat_y,   midi: { kind: cc, cc: 21 } }
+  left_x:  { address: /xbox/stick/left/x,  type: axis,    midi: { kind: cc, cc: 1 } }
+  left_y:  { address: /xbox/stick/left/y,  type: axis,    midi: { kind: cc, cc: 2 } }
+  right_x: { address: /xbox/stick/right/x, type: axis,    midi: { kind: cc, cc: 3 } }
+  right_y: { address: /xbox/stick/right/y, type: axis,    midi: { kind: cc, cc: 4 } }
+  lt:      { address: /xbox/trigger/left,  type: trigger, midi: { kind: cc, cc: 11 } }
+  rt:      { address: /xbox/trigger/right, type: trigger, midi: { kind: cc, cc: 12 } }
