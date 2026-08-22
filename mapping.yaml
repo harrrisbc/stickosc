@@ -4,6 +4,10 @@ osc:
   host: 127.0.0.1
   port: 9000
   prefix: /xbox
+  extra:
+    enabled: false
+    host: 127.0.0.1
+    port: 9001
 
 midi:
   enabled: false

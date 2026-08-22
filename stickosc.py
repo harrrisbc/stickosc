@@ -96,6 +96,10 @@ osc:
   host: 127.0.0.1
   port: 9000
   prefix: /xbox
+  extra:
+    enabled: false
+    host: 127.0.0.1
+    port: 9001
 
 midi:
   enabled: false
@@ -180,6 +184,10 @@ def load_config(path: Path) -> dict[str, Any]:
     data["osc"].setdefault("host", "127.0.0.1")
     data["osc"].setdefault("port", 9000)
     data["osc"].setdefault("prefix", "/xbox")
+    extra = data["osc"].setdefault("extra", {})
+    extra.setdefault("enabled", False)
+    extra.setdefault("host", "127.0.0.1")
+    extra.setdefault("port", 9001)
     data["midi"].setdefault("enabled", False)
     data["midi"].setdefault("port", "StickOSC")
     data["midi"].setdefault("channel", 1)
@@ -478,8 +486,15 @@ def render_status(
 
 
 class OscBridge:
-    def __init__(self, host: str, port: int, mapping: dict[str, Any]) -> None:
-        self.client = udp_client.SimpleUDPClient(host, port)
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        mapping: dict[str, Any],
+        *,
+        client: Any | None = None,
+    ) -> None:
+        self.client = client or udp_client.SimpleUDPClient(host, port)
         self.mapping = mapping
         self.last: dict[str, float] = {}
         self.sent_recently = False
@@ -501,6 +516,11 @@ class OscBridge:
                 any_sent = True
         self.sent_recently = any_sent
         return any_sent
+
+
+def osc_status_line(*bridges: OscBridge | None) -> str:
+    labels = [b.label for b in bridges if b is not None]
+    return " + ".join(labels) if labels else "off"
 
 
 # ---------------------------------------------------------------------------
@@ -700,11 +720,18 @@ class EngineSettings:
     deadzone: float = 0.12
     layout_pref: str = "auto"
     osc_enabled: bool = True
+    osc2_enabled: bool = False
+    osc2_host: str = "127.0.0.1"
+    osc2_port: int = 9001
     midi_enabled: bool = False
     midi_port: str = "StickOSC"
     midi_channel: int = 1
     demo: bool = False
     verbose: bool = False
+
+    @property
+    def any_output(self) -> bool:
+        return bool(self.osc_enabled or self.osc2_enabled or self.midi_enabled)
 
 
 @dataclass
@@ -748,6 +775,10 @@ def save_config_settings(path: Path, settings: EngineSettings, base: dict[str, A
     data["osc"]["enabled"] = bool(settings.osc_enabled)
     data["osc"]["host"] = settings.host
     data["osc"]["port"] = int(settings.port)
+    extra = data["osc"].setdefault("extra", {})
+    extra["enabled"] = bool(settings.osc2_enabled)
+    extra["host"] = settings.osc2_host
+    extra["port"] = int(settings.osc2_port)
     data["midi"]["enabled"] = bool(settings.midi_enabled)
     data["midi"]["port"] = settings.midi_port
     data["midi"]["channel"] = int(settings.midi_channel)
@@ -786,6 +817,7 @@ class StickEngine:
         )
         self._pygame_ready = False
         self._osc: OscBridge | None = None
+        self._osc2: OscBridge | None = None
         self._midi: MidiBridge | None = None
         self._joy = None
         self._mapping: dict[str, Any] = {}
@@ -901,23 +933,26 @@ class StickEngine:
         layout_pref = settings.layout_pref if settings.layout_pref in VALID_LAYOUTS else "auto"
         self._layout_pref = layout_pref
 
-        if not settings.osc_enabled and not settings.midi_enabled:
+        if not settings.any_output:
             self._publish(running=False, error="enable OSC and/or MIDI")
             return 2
 
         error: str | None = None
         self._osc = None
+        self._osc2 = None
         self._midi = None
 
         if settings.osc_enabled:
             self._osc = OscBridge(settings.host, int(settings.port), self._mapping)
+        if settings.osc2_enabled:
+            self._osc2 = OscBridge(settings.osc2_host, int(settings.osc2_port), self._mapping)
 
         if settings.midi_enabled:
             try:
                 self._midi = MidiBridge(settings.midi_port, int(settings.midi_channel), self._mapping)
             except Exception as exc:
                 error = f"MIDI open failed: {exc}"
-                if not settings.osc_enabled:
+                if not settings.osc_enabled and not settings.osc2_enabled:
                     self._publish(running=False, error=error)
                     return 1
                 self._midi = None
@@ -936,7 +971,7 @@ class StickEngine:
             active_layout = resolve_layout(layout_pref, joy_name)
 
         values = {k: 0.0 for k in self._mapping}
-        osc_line = "off" if self._osc is None else self._osc.label
+        osc_line = osc_status_line(self._osc, self._osc2)
         midi_line = (
             "off"
             if self._midi is None
@@ -965,6 +1000,7 @@ class StickEngine:
                 pass
             self._midi = None
         self._osc = None
+        self._osc2 = None
         self._joy = None
         if self._pygame_ready:
             try:
@@ -980,6 +1016,7 @@ class StickEngine:
         deadzone = float(settings.deadzone)
         layout_pref = self._layout_pref
         osc = self._osc
+        osc2 = self._osc2
         midi = self._midi
         now = time.monotonic()
 
@@ -1009,6 +1046,8 @@ class StickEngine:
         sent = False
         if osc is not None:
             sent = osc.send_changed(values) or sent
+        if osc2 is not None:
+            sent = osc2.send_changed(values) or sent
         if midi is not None:
             sent = midi.send_changed(values) or sent
 
@@ -1021,11 +1060,13 @@ class StickEngine:
         pulse = sent
         if osc is not None and osc.sent_recently:
             pulse = True
+        if osc2 is not None and osc2.sent_recently:
+            pulse = True
         if midi is not None and midi.sent_recently:
             pulse = True
 
         if force_publish or now - self._last_frame >= 1.0 / REDRAW_HZ:
-            osc_line = "off" if osc is None else osc.label
+            osc_line = osc_status_line(osc, osc2)
             midi_line = (
                 "off" if midi is None else f"ch{settings.midi_channel} → {midi.label}"
             )
@@ -1047,6 +1088,8 @@ class StickEngine:
             if not sent:
                 if osc is not None:
                     osc.sent_recently = False
+                if osc2 is not None:
+                    osc2.sent_recently = False
                 if midi is not None:
                     midi.sent_recently = False
 
@@ -1080,6 +1123,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--config", type=Path, default=None, help="path to mapping.yaml")
     p.add_argument("--host", default=None, help="OSC host (overrides config)")
     p.add_argument("--port", type=int, default=None, help="OSC port (overrides config)")
+    p.add_argument("--osc2", action="store_true", help="enable extra OSC destination")
+    p.add_argument("--osc2-host", default=None, help="extra OSC host (overrides config)")
+    p.add_argument("--osc2-port", type=int, default=None, help="extra OSC port (overrides config)")
+    p.add_argument("--no-osc2", action="store_true", help="disable extra OSC destination")
     p.add_argument("--index", type=int, default=None, help="controller index (overrides config)")
     p.add_argument(
         "--layout",
@@ -1126,6 +1173,12 @@ def main() -> int:
     cfg = load_config(config_path)
 
     osc_enabled = bool(cfg["osc"].get("enabled", True)) and not args.no_osc
+    extra = cfg["osc"].get("extra") or {}
+    osc2_enabled = bool(extra.get("enabled", False))
+    if args.osc2:
+        osc2_enabled = True
+    if args.no_osc2:
+        osc2_enabled = False
     midi_enabled = bool(cfg["midi"].get("enabled", False))
     if args.midi:
         midi_enabled = True
@@ -1145,6 +1198,9 @@ def main() -> int:
         deadzone=float(cfg["controller"]["deadzone"]),
         layout_pref=layout_pref,
         osc_enabled=osc_enabled,
+        osc2_enabled=osc2_enabled,
+        osc2_host=args.osc2_host or str(extra.get("host", "127.0.0.1")),
+        osc2_port=int(args.osc2_port if args.osc2_port is not None else extra.get("port", 9001)),
         midi_enabled=midi_enabled,
         midi_port=args.midi_port or str(cfg["midi"].get("port", "StickOSC")),
         midi_channel=int(
@@ -1154,7 +1210,7 @@ def main() -> int:
         verbose=bool(args.verbose),
     )
 
-    if not settings.osc_enabled and not settings.midi_enabled:
+    if not settings.any_output:
         print("nothing to send: enable OSC and/or MIDI", file=sys.stderr)
         return 2
 
