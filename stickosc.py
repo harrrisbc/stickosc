@@ -90,12 +90,38 @@ EPSILON = 0.001
 POLL_HZ = 60
 REDRAW_HZ = 30
 
+# Stable control order for GUI mapping table / presets.
+MAP_KEYS: tuple[str, ...] = (
+    "a",
+    "b",
+    "x",
+    "y",
+    "lb",
+    "rb",
+    "back",
+    "start",
+    "l3",
+    "r3",
+    "dpad_x",
+    "dpad_y",
+    "left_x",
+    "left_y",
+    "right_x",
+    "right_y",
+    "lt",
+    "rt",
+)
+
 DEFAULT_YAML = """# StickOSC config — remap OSC `address` and optional `midi` per control
 osc:
   enabled: true
   host: 127.0.0.1
   port: 9000
-  prefix: /xbox
+  prefix: /stickosc
+  extra:
+    enabled: false
+    host: 127.0.0.1
+    port: 9001
 
 midi:
   enabled: false
@@ -108,24 +134,24 @@ controller:
   layout: auto
 
 map:
-  a:       { address: /xbox/btn/a,         type: button,  midi: { kind: note, note: 60 } }
-  b:       { address: /xbox/btn/b,         type: button,  midi: { kind: note, note: 62 } }
-  x:       { address: /xbox/btn/x,         type: button,  midi: { kind: note, note: 64 } }
-  y:       { address: /xbox/btn/y,         type: button,  midi: { kind: note, note: 65 } }
-  lb:      { address: /xbox/btn/lb,        type: button,  midi: { kind: note, note: 67 } }
-  rb:      { address: /xbox/btn/rb,        type: button,  midi: { kind: note, note: 69 } }
-  back:    { address: /xbox/btn/back,      type: button,  midi: { kind: note, note: 71 } }
-  start:   { address: /xbox/btn/start,     type: button,  midi: { kind: note, note: 72 } }
-  l3:      { address: /xbox/btn/l3,        type: button,  midi: { kind: note, note: 74 } }
-  r3:      { address: /xbox/btn/r3,        type: button,  midi: { kind: note, note: 76 } }
-  dpad_x:  { address: /xbox/dpad/x,        type: hat_x,   midi: { kind: cc, cc: 20 } }
-  dpad_y:  { address: /xbox/dpad/y,        type: hat_y,   midi: { kind: cc, cc: 21 } }
-  left_x:  { address: /xbox/stick/left/x,  type: axis,    midi: { kind: cc, cc: 1 } }
-  left_y:  { address: /xbox/stick/left/y,  type: axis,    midi: { kind: cc, cc: 2 } }
-  right_x: { address: /xbox/stick/right/x, type: axis,    midi: { kind: cc, cc: 3 } }
-  right_y: { address: /xbox/stick/right/y, type: axis,    midi: { kind: cc, cc: 4 } }
-  lt:      { address: /xbox/trigger/left,  type: trigger, midi: { kind: cc, cc: 11 } }
-  rt:      { address: /xbox/trigger/right, type: trigger, midi: { kind: cc, cc: 12 } }
+  a:       { address: /stickosc/btn/a,         type: button,  label: A/Cross, midi: { kind: note, note: 60 } }
+  b:       { address: /stickosc/btn/b,         type: button,  label: B/Circle, midi: { kind: note, note: 62 } }
+  x:       { address: /stickosc/btn/x,         type: button,  label: X/Square, midi: { kind: note, note: 64 } }
+  y:       { address: /stickosc/btn/y,         type: button,  label: Y/Triangle, midi: { kind: note, note: 65 } }
+  lb:      { address: /stickosc/btn/lb,        type: button,  label: LB/L1, midi: { kind: note, note: 67 } }
+  rb:      { address: /stickosc/btn/rb,        type: button,  label: RB/R1, midi: { kind: note, note: 69 } }
+  back:    { address: /stickosc/btn/back,      type: button,  label: Back/Create, midi: { kind: note, note: 71 } }
+  start:   { address: /stickosc/btn/start,     type: button,  label: Start/Options, midi: { kind: note, note: 72 } }
+  l3:      { address: /stickosc/btn/l3,        type: button,  label: L3, midi: { kind: note, note: 74 } }
+  r3:      { address: /stickosc/btn/r3,        type: button,  label: R3, midi: { kind: note, note: 76 } }
+  dpad_x:  { address: /stickosc/dpad/x,        type: hat_x,   label: D-pad X, midi: { kind: cc, cc: 20 } }
+  dpad_y:  { address: /stickosc/dpad/y,        type: hat_y,   label: D-pad Y, midi: { kind: cc, cc: 21 } }
+  left_x:  { address: /stickosc/stick/left/x,  type: axis,    label: Left X, midi: { kind: cc, cc: 1 } }
+  left_y:  { address: /stickosc/stick/left/y,  type: axis,    label: Left Y, midi: { kind: cc, cc: 2 } }
+  right_x: { address: /stickosc/stick/right/x, type: axis,    label: Right X, midi: { kind: cc, cc: 3 } }
+  right_y: { address: /stickosc/stick/right/y, type: axis,    label: Right Y, midi: { kind: cc, cc: 4 } }
+  lt:      { address: /stickosc/trigger/left,  type: trigger, label: LT/L2, midi: { kind: cc, cc: 11 } }
+  rt:      { address: /stickosc/trigger/right, type: trigger, label: RT/R2, midi: { kind: cc, cc: 12 } }
 """
 
 # ---------------------------------------------------------------------------
@@ -179,7 +205,11 @@ def load_config(path: Path) -> dict[str, Any]:
     data["osc"].setdefault("enabled", True)
     data["osc"].setdefault("host", "127.0.0.1")
     data["osc"].setdefault("port", 9000)
-    data["osc"].setdefault("prefix", "/xbox")
+    data["osc"].setdefault("prefix", "/stickosc")
+    extra = data["osc"].setdefault("extra", {})
+    extra.setdefault("enabled", False)
+    extra.setdefault("host", "127.0.0.1")
+    extra.setdefault("port", 9001)
     data["midi"].setdefault("enabled", False)
     data["midi"].setdefault("port", "StickOSC")
     data["midi"].setdefault("channel", 1)
@@ -187,6 +217,19 @@ def load_config(path: Path) -> dict[str, Any]:
     data["controller"].setdefault("deadzone", 0.12)
     data["controller"].setdefault("layout", "auto")
     return data
+
+
+def write_config(path: Path, data: dict[str, Any]) -> None:
+    """Write full config dict to YAML (preserves map: and other keys)."""
+    with path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
+
+
+def save_mapping_table(path: Path, mapping: dict[str, Any], base: dict[str, Any] | None = None) -> None:
+    """Persist the control map table into mapping.yaml."""
+    data = base if base is not None else load_config(path)
+    data["map"] = mapping
+    write_config(path, data)
 
 
 def detect_layout(joy_name: str | None) -> str:
@@ -478,8 +521,15 @@ def render_status(
 
 
 class OscBridge:
-    def __init__(self, host: str, port: int, mapping: dict[str, Any]) -> None:
-        self.client = udp_client.SimpleUDPClient(host, port)
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        mapping: dict[str, Any],
+        *,
+        client: Any | None = None,
+    ) -> None:
+        self.client = client or udp_client.SimpleUDPClient(host, port)
         self.mapping = mapping
         self.last: dict[str, float] = {}
         self.sent_recently = False
@@ -501,6 +551,11 @@ class OscBridge:
                 any_sent = True
         self.sent_recently = any_sent
         return any_sent
+
+
+def osc_status_line(*bridges: OscBridge | None) -> str:
+    labels = [b.label for b in bridges if b is not None]
+    return " + ".join(labels) if labels else "off"
 
 
 # ---------------------------------------------------------------------------
@@ -535,35 +590,59 @@ class MidiBridge:
         else:
             self._open_port(port_name)
 
+    @staticmethod
+    def _is_windows() -> bool:
+        return sys.platform.startswith("win")
+
     def _open_port(self, port_name: str) -> None:
         mido = self.mido
         try:
-            outputs = mido.get_output_names()
+            outputs = list(mido.get_output_names())
         except Exception as exc:
             raise RuntimeError(
                 "MIDI backend unavailable (need a system sequencer such as "
-                f"ALSA/CoreMIDI). Details: {exc}"
+                f"ALSA/CoreMIDI, or loopMIDI on Windows). Details: {exc}"
             ) from exc
+
+        wanted = (port_name or "").strip()
+
+        # Empty name + exactly one system port → auto-select
+        if not wanted and len(outputs) == 1:
+            self.port = mido.open_output(outputs[0])
+            self.label = outputs[0]
+            return
 
         # Exact / substring match on an existing output first
         match = None
-        for name in outputs:
-            if name == port_name or port_name.lower() in name.lower():
-                match = name
-                break
+        if wanted:
+            for name in outputs:
+                if name == wanted or wanted.lower() in name.lower():
+                    match = name
+                    break
 
         if match is not None:
             self.port = mido.open_output(match)
             self.label = match
             return
 
+        # Windows cannot create virtual MIDI ports via rtmidi — need loopMIDI etc.
+        if self._is_windows():
+            available = ", ".join(outputs) if outputs else "none"
+            raise RuntimeError(
+                f"could not open MIDI port {wanted or 'StickOSC'!r}. "
+                "Windows cannot create a virtual MIDI port from this app. "
+                "Install loopMIDI (or similar), create a port, pick it in the "
+                f"MIDI port dropdown, then Start again. Available: {available}"
+            )
+
         # Create a virtual port (ALSA/CoreMIDI/JACK depending on OS)
+        create_name = wanted or "StickOSC"
         try:
-            self.port = mido.open_output(port_name, virtual=True)
-            self.label = f"{port_name} (virtual)"
+            self.port = mido.open_output(create_name, virtual=True)
+            self.label = f"{create_name} (virtual)"
         except Exception as exc:
             raise RuntimeError(
-                f"could not open MIDI port {port_name!r} "
+                f"could not open MIDI port {create_name!r} "
                 f"(available: {outputs or 'none'}): {exc}"
             ) from exc
 
@@ -575,7 +654,7 @@ class MidiBridge:
             return list(mido.get_output_names())
         except Exception as exc:
             raise RuntimeError(
-                "MIDI backend unavailable (need ALSA/CoreMIDI). "
+                "MIDI backend unavailable (need ALSA/CoreMIDI, or loopMIDI on Windows). "
                 f"Details: {exc}"
             ) from exc
     def send_changed(self, values: dict[str, float]) -> bool:
@@ -700,11 +779,18 @@ class EngineSettings:
     deadzone: float = 0.12
     layout_pref: str = "auto"
     osc_enabled: bool = True
+    osc2_enabled: bool = False
+    osc2_host: str = "127.0.0.1"
+    osc2_port: int = 9001
     midi_enabled: bool = False
     midi_port: str = "StickOSC"
     midi_channel: int = 1
     demo: bool = False
     verbose: bool = False
+
+    @property
+    def any_output(self) -> bool:
+        return bool(self.osc_enabled or self.osc2_enabled or self.midi_enabled)
 
 
 @dataclass
@@ -748,14 +834,17 @@ def save_config_settings(path: Path, settings: EngineSettings, base: dict[str, A
     data["osc"]["enabled"] = bool(settings.osc_enabled)
     data["osc"]["host"] = settings.host
     data["osc"]["port"] = int(settings.port)
+    extra = data["osc"].setdefault("extra", {})
+    extra["enabled"] = bool(settings.osc2_enabled)
+    extra["host"] = settings.osc2_host
+    extra["port"] = int(settings.osc2_port)
     data["midi"]["enabled"] = bool(settings.midi_enabled)
     data["midi"]["port"] = settings.midi_port
     data["midi"]["channel"] = int(settings.midi_channel)
     data["controller"]["index"] = int(settings.index)
     data["controller"]["deadzone"] = float(settings.deadzone)
     data["controller"]["layout"] = settings.layout_pref
-    with path.open("w", encoding="utf-8") as f:
-        yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
+    write_config(path, data)
 
 
 class StickEngine:
@@ -786,6 +875,7 @@ class StickEngine:
         )
         self._pygame_ready = False
         self._osc: OscBridge | None = None
+        self._osc2: OscBridge | None = None
         self._midi: MidiBridge | None = None
         self._joy = None
         self._mapping: dict[str, Any] = {}
@@ -901,23 +991,26 @@ class StickEngine:
         layout_pref = settings.layout_pref if settings.layout_pref in VALID_LAYOUTS else "auto"
         self._layout_pref = layout_pref
 
-        if not settings.osc_enabled and not settings.midi_enabled:
+        if not settings.any_output:
             self._publish(running=False, error="enable OSC and/or MIDI")
             return 2
 
         error: str | None = None
         self._osc = None
+        self._osc2 = None
         self._midi = None
 
         if settings.osc_enabled:
             self._osc = OscBridge(settings.host, int(settings.port), self._mapping)
+        if settings.osc2_enabled:
+            self._osc2 = OscBridge(settings.osc2_host, int(settings.osc2_port), self._mapping)
 
         if settings.midi_enabled:
             try:
                 self._midi = MidiBridge(settings.midi_port, int(settings.midi_channel), self._mapping)
             except Exception as exc:
                 error = f"MIDI open failed: {exc}"
-                if not settings.osc_enabled:
+                if not settings.osc_enabled and not settings.osc2_enabled:
                     self._publish(running=False, error=error)
                     return 1
                 self._midi = None
@@ -936,7 +1029,7 @@ class StickEngine:
             active_layout = resolve_layout(layout_pref, joy_name)
 
         values = {k: 0.0 for k in self._mapping}
-        osc_line = "off" if self._osc is None else self._osc.label
+        osc_line = osc_status_line(self._osc, self._osc2)
         midi_line = (
             "off"
             if self._midi is None
@@ -965,6 +1058,7 @@ class StickEngine:
                 pass
             self._midi = None
         self._osc = None
+        self._osc2 = None
         self._joy = None
         if self._pygame_ready:
             try:
@@ -980,6 +1074,7 @@ class StickEngine:
         deadzone = float(settings.deadzone)
         layout_pref = self._layout_pref
         osc = self._osc
+        osc2 = self._osc2
         midi = self._midi
         now = time.monotonic()
 
@@ -1009,6 +1104,8 @@ class StickEngine:
         sent = False
         if osc is not None:
             sent = osc.send_changed(values) or sent
+        if osc2 is not None:
+            sent = osc2.send_changed(values) or sent
         if midi is not None:
             sent = midi.send_changed(values) or sent
 
@@ -1021,11 +1118,13 @@ class StickEngine:
         pulse = sent
         if osc is not None and osc.sent_recently:
             pulse = True
+        if osc2 is not None and osc2.sent_recently:
+            pulse = True
         if midi is not None and midi.sent_recently:
             pulse = True
 
         if force_publish or now - self._last_frame >= 1.0 / REDRAW_HZ:
-            osc_line = "off" if osc is None else osc.label
+            osc_line = osc_status_line(osc, osc2)
             midi_line = (
                 "off" if midi is None else f"ch{settings.midi_channel} → {midi.label}"
             )
@@ -1047,6 +1146,8 @@ class StickEngine:
             if not sent:
                 if osc is not None:
                     osc.sent_recently = False
+                if osc2 is not None:
+                    osc2.sent_recently = False
                 if midi is not None:
                     midi.sent_recently = False
 
@@ -1080,6 +1181,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--config", type=Path, default=None, help="path to mapping.yaml")
     p.add_argument("--host", default=None, help="OSC host (overrides config)")
     p.add_argument("--port", type=int, default=None, help="OSC port (overrides config)")
+    p.add_argument("--osc2", action="store_true", help="enable extra OSC destination")
+    p.add_argument("--osc2-host", default=None, help="extra OSC host (overrides config)")
+    p.add_argument("--osc2-port", type=int, default=None, help="extra OSC port (overrides config)")
+    p.add_argument("--no-osc2", action="store_true", help="disable extra OSC destination")
     p.add_argument("--index", type=int, default=None, help="controller index (overrides config)")
     p.add_argument(
         "--layout",
@@ -1126,6 +1231,12 @@ def main() -> int:
     cfg = load_config(config_path)
 
     osc_enabled = bool(cfg["osc"].get("enabled", True)) and not args.no_osc
+    extra = cfg["osc"].get("extra") or {}
+    osc2_enabled = bool(extra.get("enabled", False))
+    if args.osc2:
+        osc2_enabled = True
+    if args.no_osc2:
+        osc2_enabled = False
     midi_enabled = bool(cfg["midi"].get("enabled", False))
     if args.midi:
         midi_enabled = True
@@ -1145,6 +1256,9 @@ def main() -> int:
         deadzone=float(cfg["controller"]["deadzone"]),
         layout_pref=layout_pref,
         osc_enabled=osc_enabled,
+        osc2_enabled=osc2_enabled,
+        osc2_host=args.osc2_host or str(extra.get("host", "127.0.0.1")),
+        osc2_port=int(args.osc2_port if args.osc2_port is not None else extra.get("port", 9001)),
         midi_enabled=midi_enabled,
         midi_port=args.midi_port or str(cfg["midi"].get("port", "StickOSC")),
         midi_channel=int(
@@ -1154,7 +1268,7 @@ def main() -> int:
         verbose=bool(args.verbose),
     )
 
-    if not settings.osc_enabled and not settings.midi_enabled:
+    if not settings.any_output:
         print("nothing to send: enable OSC and/or MIDI", file=sys.stderr)
         return 2
 

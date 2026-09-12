@@ -14,7 +14,12 @@ def make_handler(verbose: bool):
     def handler(address: str, *args) -> None:
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         payload = ", ".join(str(a) for a in args)
-        if verbose or address.startswith("/xbox/btn") or address.startswith("/xbox/dpad"):
+        if verbose or "/btn" in address or "/dpad" in address or address in (
+            "/go",
+            "/stop",
+            "/panic",
+            "/hardStop",
+        ):
             print(f"{ts}  {address}  {payload}")
         else:
             # axes / triggers: overwrite one status line-ish

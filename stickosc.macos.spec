@@ -17,6 +17,7 @@ a = Analysis(
         'mido',
         'rtmidi',
         'stickosc',
+        'presets',
     ],
     hookspath=[],
     hooksconfig={},
