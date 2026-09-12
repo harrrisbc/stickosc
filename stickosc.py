@@ -90,12 +90,34 @@ EPSILON = 0.001
 POLL_HZ = 60
 REDRAW_HZ = 30
 
+# Stable control order for GUI mapping table / presets.
+MAP_KEYS: tuple[str, ...] = (
+    "a",
+    "b",
+    "x",
+    "y",
+    "lb",
+    "rb",
+    "back",
+    "start",
+    "l3",
+    "r3",
+    "dpad_x",
+    "dpad_y",
+    "left_x",
+    "left_y",
+    "right_x",
+    "right_y",
+    "lt",
+    "rt",
+)
+
 DEFAULT_YAML = """# StickOSC config — remap OSC `address` and optional `midi` per control
 osc:
   enabled: true
   host: 127.0.0.1
   port: 9000
-  prefix: /xbox
+  prefix: /stickosc
   extra:
     enabled: false
     host: 127.0.0.1
@@ -112,24 +134,24 @@ controller:
   layout: auto
 
 map:
-  a:       { address: /xbox/btn/a,         type: button,  midi: { kind: note, note: 60 } }
-  b:       { address: /xbox/btn/b,         type: button,  midi: { kind: note, note: 62 } }
-  x:       { address: /xbox/btn/x,         type: button,  midi: { kind: note, note: 64 } }
-  y:       { address: /xbox/btn/y,         type: button,  midi: { kind: note, note: 65 } }
-  lb:      { address: /xbox/btn/lb,        type: button,  midi: { kind: note, note: 67 } }
-  rb:      { address: /xbox/btn/rb,        type: button,  midi: { kind: note, note: 69 } }
-  back:    { address: /xbox/btn/back,      type: button,  midi: { kind: note, note: 71 } }
-  start:   { address: /xbox/btn/start,     type: button,  midi: { kind: note, note: 72 } }
-  l3:      { address: /xbox/btn/l3,        type: button,  midi: { kind: note, note: 74 } }
-  r3:      { address: /xbox/btn/r3,        type: button,  midi: { kind: note, note: 76 } }
-  dpad_x:  { address: /xbox/dpad/x,        type: hat_x,   midi: { kind: cc, cc: 20 } }
-  dpad_y:  { address: /xbox/dpad/y,        type: hat_y,   midi: { kind: cc, cc: 21 } }
-  left_x:  { address: /xbox/stick/left/x,  type: axis,    midi: { kind: cc, cc: 1 } }
-  left_y:  { address: /xbox/stick/left/y,  type: axis,    midi: { kind: cc, cc: 2 } }
-  right_x: { address: /xbox/stick/right/x, type: axis,    midi: { kind: cc, cc: 3 } }
-  right_y: { address: /xbox/stick/right/y, type: axis,    midi: { kind: cc, cc: 4 } }
-  lt:      { address: /xbox/trigger/left,  type: trigger, midi: { kind: cc, cc: 11 } }
-  rt:      { address: /xbox/trigger/right, type: trigger, midi: { kind: cc, cc: 12 } }
+  a:       { address: /stickosc/btn/a,         type: button,  label: A/Cross, midi: { kind: note, note: 60 } }
+  b:       { address: /stickosc/btn/b,         type: button,  label: B/Circle, midi: { kind: note, note: 62 } }
+  x:       { address: /stickosc/btn/x,         type: button,  label: X/Square, midi: { kind: note, note: 64 } }
+  y:       { address: /stickosc/btn/y,         type: button,  label: Y/Triangle, midi: { kind: note, note: 65 } }
+  lb:      { address: /stickosc/btn/lb,        type: button,  label: LB/L1, midi: { kind: note, note: 67 } }
+  rb:      { address: /stickosc/btn/rb,        type: button,  label: RB/R1, midi: { kind: note, note: 69 } }
+  back:    { address: /stickosc/btn/back,      type: button,  label: Back/Create, midi: { kind: note, note: 71 } }
+  start:   { address: /stickosc/btn/start,     type: button,  label: Start/Options, midi: { kind: note, note: 72 } }
+  l3:      { address: /stickosc/btn/l3,        type: button,  label: L3, midi: { kind: note, note: 74 } }
+  r3:      { address: /stickosc/btn/r3,        type: button,  label: R3, midi: { kind: note, note: 76 } }
+  dpad_x:  { address: /stickosc/dpad/x,        type: hat_x,   label: D-pad X, midi: { kind: cc, cc: 20 } }
+  dpad_y:  { address: /stickosc/dpad/y,        type: hat_y,   label: D-pad Y, midi: { kind: cc, cc: 21 } }
+  left_x:  { address: /stickosc/stick/left/x,  type: axis,    label: Left X, midi: { kind: cc, cc: 1 } }
+  left_y:  { address: /stickosc/stick/left/y,  type: axis,    label: Left Y, midi: { kind: cc, cc: 2 } }
+  right_x: { address: /stickosc/stick/right/x, type: axis,    label: Right X, midi: { kind: cc, cc: 3 } }
+  right_y: { address: /stickosc/stick/right/y, type: axis,    label: Right Y, midi: { kind: cc, cc: 4 } }
+  lt:      { address: /stickosc/trigger/left,  type: trigger, label: LT/L2, midi: { kind: cc, cc: 11 } }
+  rt:      { address: /stickosc/trigger/right, type: trigger, label: RT/R2, midi: { kind: cc, cc: 12 } }
 """
 
 # ---------------------------------------------------------------------------
@@ -183,7 +205,7 @@ def load_config(path: Path) -> dict[str, Any]:
     data["osc"].setdefault("enabled", True)
     data["osc"].setdefault("host", "127.0.0.1")
     data["osc"].setdefault("port", 9000)
-    data["osc"].setdefault("prefix", "/xbox")
+    data["osc"].setdefault("prefix", "/stickosc")
     extra = data["osc"].setdefault("extra", {})
     extra.setdefault("enabled", False)
     extra.setdefault("host", "127.0.0.1")
@@ -195,6 +217,19 @@ def load_config(path: Path) -> dict[str, Any]:
     data["controller"].setdefault("deadzone", 0.12)
     data["controller"].setdefault("layout", "auto")
     return data
+
+
+def write_config(path: Path, data: dict[str, Any]) -> None:
+    """Write full config dict to YAML (preserves map: and other keys)."""
+    with path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
+
+
+def save_mapping_table(path: Path, mapping: dict[str, Any], base: dict[str, Any] | None = None) -> None:
+    """Persist the control map table into mapping.yaml."""
+    data = base if base is not None else load_config(path)
+    data["map"] = mapping
+    write_config(path, data)
 
 
 def detect_layout(joy_name: str | None) -> str:
@@ -555,35 +590,59 @@ class MidiBridge:
         else:
             self._open_port(port_name)
 
+    @staticmethod
+    def _is_windows() -> bool:
+        return sys.platform.startswith("win")
+
     def _open_port(self, port_name: str) -> None:
         mido = self.mido
         try:
-            outputs = mido.get_output_names()
+            outputs = list(mido.get_output_names())
         except Exception as exc:
             raise RuntimeError(
                 "MIDI backend unavailable (need a system sequencer such as "
-                f"ALSA/CoreMIDI). Details: {exc}"
+                f"ALSA/CoreMIDI, or loopMIDI on Windows). Details: {exc}"
             ) from exc
+
+        wanted = (port_name or "").strip()
+
+        # Empty name + exactly one system port → auto-select
+        if not wanted and len(outputs) == 1:
+            self.port = mido.open_output(outputs[0])
+            self.label = outputs[0]
+            return
 
         # Exact / substring match on an existing output first
         match = None
-        for name in outputs:
-            if name == port_name or port_name.lower() in name.lower():
-                match = name
-                break
+        if wanted:
+            for name in outputs:
+                if name == wanted or wanted.lower() in name.lower():
+                    match = name
+                    break
 
         if match is not None:
             self.port = mido.open_output(match)
             self.label = match
             return
 
+        # Windows cannot create virtual MIDI ports via rtmidi — need loopMIDI etc.
+        if self._is_windows():
+            available = ", ".join(outputs) if outputs else "none"
+            raise RuntimeError(
+                f"could not open MIDI port {wanted or 'StickOSC'!r}. "
+                "Windows cannot create a virtual MIDI port from this app. "
+                "Install loopMIDI (or similar), create a port, pick it in the "
+                f"MIDI port dropdown, then Start again. Available: {available}"
+            )
+
         # Create a virtual port (ALSA/CoreMIDI/JACK depending on OS)
+        create_name = wanted or "StickOSC"
         try:
-            self.port = mido.open_output(port_name, virtual=True)
-            self.label = f"{port_name} (virtual)"
+            self.port = mido.open_output(create_name, virtual=True)
+            self.label = f"{create_name} (virtual)"
         except Exception as exc:
             raise RuntimeError(
-                f"could not open MIDI port {port_name!r} "
+                f"could not open MIDI port {create_name!r} "
                 f"(available: {outputs or 'none'}): {exc}"
             ) from exc
 
@@ -595,7 +654,7 @@ class MidiBridge:
             return list(mido.get_output_names())
         except Exception as exc:
             raise RuntimeError(
-                "MIDI backend unavailable (need ALSA/CoreMIDI). "
+                "MIDI backend unavailable (need ALSA/CoreMIDI, or loopMIDI on Windows). "
                 f"Details: {exc}"
             ) from exc
     def send_changed(self, values: dict[str, float]) -> bool:
@@ -785,8 +844,7 @@ def save_config_settings(path: Path, settings: EngineSettings, base: dict[str, A
     data["controller"]["index"] = int(settings.index)
     data["controller"]["deadzone"] = float(settings.deadzone)
     data["controller"]["layout"] = settings.layout_pref
-    with path.open("w", encoding="utf-8") as f:
-        yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
+    write_config(path, data)
 
 
 class StickEngine:

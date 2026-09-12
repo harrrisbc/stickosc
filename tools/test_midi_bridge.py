@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -25,13 +26,15 @@ class FakePort:
         pass
 
 
-def main() -> int:
+def test_float_to_midi_cc() -> None:
     assert float_to_midi_cc(0.0, "axis") == 64
     assert float_to_midi_cc(-1.0, "axis") == 0
     assert float_to_midi_cc(1.0, "axis") == 127
     assert float_to_midi_cc(0.0, "trigger") == 0
     assert float_to_midi_cc(1.0, "trigger") == 127
 
+
+def test_send_changed_with_fake_port() -> None:
     cfg = load_config(ROOT / "mapping.yaml")
     port = FakePort()
     midi = MidiBridge("fake", 1, cfg["map"], port=port)
@@ -67,7 +70,58 @@ def main() -> int:
     assert midi.send_changed(values) is False
     assert len(port.messages) == before
 
-    print(f"ok — {len(port.messages)} MIDI messages exercised")
+
+def test_windows_refuses_virtual_port() -> None:
+    fake_mido = MagicMock()
+    fake_mido.get_output_names.return_value = []
+
+    with patch.dict("sys.modules", {"mido": fake_mido}):
+        with patch.object(MidiBridge, "_is_windows", return_value=True):
+            try:
+                MidiBridge("StickOSC", 1, {})
+                raise AssertionError("expected RuntimeError on Windows with no ports")
+            except RuntimeError as exc:
+                msg = str(exc).lower()
+                assert "loopmidi" in msg
+                assert "windows" in msg
+    fake_mido.open_output.assert_not_called()
+
+
+def test_non_windows_tries_virtual() -> None:
+    fake_port = MagicMock()
+    fake_port.name = "StickOSC"
+    fake_mido = MagicMock()
+    fake_mido.get_output_names.return_value = []
+    fake_mido.open_output.return_value = fake_port
+
+    with patch.dict("sys.modules", {"mido": fake_mido}):
+        with patch.object(MidiBridge, "_is_windows", return_value=False):
+            midi = MidiBridge("StickOSC", 1, {})
+            assert midi.label == "StickOSC (virtual)"
+    fake_mido.open_output.assert_called_once_with("StickOSC", virtual=True)
+
+
+def test_auto_select_single_port_when_name_empty() -> None:
+    fake_port = MagicMock()
+    fake_port.name = "loopMIDI Port"
+    fake_mido = MagicMock()
+    fake_mido.get_output_names.return_value = ["loopMIDI Port"]
+    fake_mido.open_output.return_value = fake_port
+
+    with patch.dict("sys.modules", {"mido": fake_mido}):
+        with patch.object(MidiBridge, "_is_windows", return_value=True):
+            midi = MidiBridge("", 1, {})
+            assert midi.label == "loopMIDI Port"
+    fake_mido.open_output.assert_called_once_with("loopMIDI Port")
+
+
+def main() -> int:
+    test_float_to_midi_cc()
+    test_send_changed_with_fake_port()
+    test_windows_refuses_virtual_port()
+    test_non_windows_tries_virtual()
+    test_auto_select_single_port_when_name_empty()
+    print("ok — MIDI bridge + platform open tests passed")
     return 0
 
 

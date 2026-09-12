@@ -20,7 +20,13 @@ python stickosc.py --gui
 python gui_app.py
 ```
 
-Controls: Start/Stop, OSC host/port, **OSC extra** (second destination), MIDI on/off, layout (`auto`/`xbox`/`ps5`), pad index, demo mode, live stick meters. **Save** writes settings into `mapping.yaml`.
+Controls: Start/Stop, OSC host/port, **OSC extra** (second destination), MIDI on/off, layout (`auto`/`xbox`/`ps5`), pad index, demo mode, live stick meters.
+
+**Mapping tab:** edit each control’s OSC address, optional label, and MIDI note/CC. **Save mapping** writes into `mapping.yaml`.
+
+**Presets:** Apply **StickOSC**, **QLab** (UDP `53000`), or **ETC Eos** (UDP `8000`) to fill useful show-control addresses in one click — then tweak any row. Applying a preset while running will ask to Stop first.
+
+**Save** on the Control tab writes settings + the current mapping table into `mapping.yaml`.
 
 ### Standalone app (Mac / Windows)
 
@@ -140,7 +146,7 @@ StickOSC auto-detects the pad from its name and picks a button/axis **layout**.
 | `back` / `start` | Back/View Start/Menu | Create Options |
 | `l3` / `r3` | stick clicks | stick clicks |
 
-OSC addresses stay under `/xbox/...` by default so existing patches keep working — remap in YAML if you want `/ps5/...`.
+OSC addresses stay under `/stickosc/...` by default — remap in the GUI Mapping tab, apply a QLab/Eos preset, or edit YAML.
 
 ```bash
 # force a layout if auto-detect is wrong
@@ -162,7 +168,9 @@ python stickosc.py --midi
 
 Or set `midi.enabled: true` in `mapping.yaml`.
 
-StickOSC opens / creates a port named **`StickOSC`** (virtual when possible). Point your DAW or synth at that port.
+**macOS / Linux:** StickOSC opens or creates a virtual port named **`StickOSC`** when possible. Point your DAW or synth at that port.
+
+**Windows:** this app cannot create a virtual MIDI port. Install [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) (or similar), create a port, then pick it from the GUI **MIDI port** dropdown (Refresh) or pass `--midi-port "Your Port Name"`.
 
 ```bash
 # see ports
@@ -187,8 +195,26 @@ python stickosc.py --midi --midi-port "IAC Driver Bus 1" --midi-channel 2
 Edit the `midi:` block on each control in `mapping.yaml` — no code edits needed.
 
 ```yaml
-a:  { address: /xbox/btn/a, type: button, midi: { kind: note, note: 60, velocity: 100 } }
-lt: { address: /xbox/trigger/left, type: trigger, midi: { kind: cc, cc: 11 } }
+a:  { address: /stickosc/btn/a, type: button, midi: { kind: note, note: 60, velocity: 100 } }
+lt: { address: /stickosc/trigger/left, type: trigger, midi: { kind: cc, cc: 11 } }
+```
+
+## Show-control presets
+
+| Preset | Suggested OSC port | Highlights |
+|--------|--------------------|------------|
+| **StickOSC** | `9000` | `/stickosc/...` generic paths |
+| **QLab** | `53000` | `/go`, `/stop`, `/panic`, `/cue/selected/start`, playhead next/prev |
+| **ETC Eos** | `8000` | `/eos/key/go_0`, `/eos/key/stop`, chan 1/2 levels + pan/tilt |
+
+Apply from the GUI **Mapping** tab, or in Python:
+
+```python
+from presets import apply_preset
+from stickosc import load_config, write_config
+
+cfg = apply_preset(load_config("mapping.yaml"), "QLab")
+write_config(Path("mapping.yaml"), cfg)
 ```
 
 ## Demo (no controller)
@@ -225,17 +251,17 @@ Simulates stick / trigger motion so you can verify OSC / MIDI without hardware.
 | `--verbose` | log button presses |
 | `--static` | no pulse animation |
 
-## OSC addresses (default)
+## OSC addresses (default StickOSC preset)
 
 | Control | Address | Range |
 |---------|---------|-------|
-| A B X Y / LB RB / Back Start / L3 R3 | `/xbox/btn/...` | `0` or `1` |
-| D-pad | `/xbox/dpad/x`, `/xbox/dpad/y` | `-1` / `0` / `1` |
-| Left stick | `/xbox/stick/left/x`, `.../y` | `-1…1` (up = +1) |
-| Right stick | `/xbox/stick/right/x`, `.../y` | `-1…1` |
-| Triggers | `/xbox/trigger/left`, `.../right` | `0…1` |
+| A B X Y / LB RB / Back Start / L3 R3 | `/stickosc/btn/...` | `0` or `1` |
+| D-pad | `/stickosc/dpad/x`, `/stickosc/dpad/y` | `-1` / `0` / `1` |
+| Left stick | `/stickosc/stick/left/x`, `.../y` | `-1…1` (up = +1) |
+| Right stick | `/stickosc/stick/right/x`, `.../y` | `-1…1` |
+| Triggers | `/stickosc/trigger/left`, `.../right` | `0…1` |
 
-Edit `mapping.yaml` to change any address — no code edits needed. If the file is missing, StickOSC writes a default copy on first run.
+Edit addresses in the GUI Mapping tab or `mapping.yaml`. If the file is missing, StickOSC writes a default copy on first run.
 
 ## Listen test (Python)
 
@@ -257,7 +283,7 @@ python tools/midi_listen.py --port StickOSC
 
 - Stick deadzone default: `0.12` (in `mapping.yaml`)
 - Sends **only on change** (not a flood every frame)
-- MIDI uses **mido** + **python-rtmidi** (virtual port on most OSes)
+- MIDI uses **mido** + **python-rtmidi** (virtual port on macOS/Linux; use loopMIDI on Windows)
 - PS5 touchpad / gyro / adaptive triggers are not mapped yet
 - `Ctrl+C` to quit cleanly (also sends MIDI All Notes Off)
 - Set `NO_COLOR=1` to disable ANSI colours
